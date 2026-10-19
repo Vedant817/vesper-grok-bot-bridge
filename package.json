@@ -1,0 +1,41 @@
+{
+  "name": "grok-bot-mcp-agent",
+  "version": "0.1.0",
+  "description": "Universal AI-in-the-Loop Grok Supervisor and Agentic Human Proxy for T3 Code, ACP, Codex, and Claude Code",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts"
+  },
+  "keywords": [
+    "grok",
+    "mcp",
+    "acp",
+    "agentic",
+    "supervisor",
+    "human-in-the-loop",
+    "t3-code",
+    "codex",
+    "claude-code"
+  ],
+  "author": "Vedant",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "effect": "^3.13.0",
+    "ws": "^8.18.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}
