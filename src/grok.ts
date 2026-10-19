@@ -26,11 +26,12 @@ export class GrokReasoner implements Reasoner {
     const reader = response.body?.getReader(); if (!reader) throw new Error('Grok response body missing');
     const chunks: Uint8Array[] = []; let size = 0;
     while (true) { const { value, done } = await reader.read(); if (done) break; size += value.length; if (size > 256000) { await reader.cancel(); throw new Error('Grok response limit exceeded'); } chunks.push(value); }
-    const raw = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    let raw: any;
+    try { raw = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new Error('Malformed Grok JSON envelope'); }
     if (raw.status !== 'completed') throw new Error('Grok response did not complete');
     const text = raw.output?.filter((o: any) => o.type === 'message').flatMap((o: any) => o.content ?? []).filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('');
     if (typeof text !== 'string') throw new Error('Grok response has no text');
-    return schema.parse(JSON.parse(text));
+    try { return schema.parse(JSON.parse(text)); } catch { throw new Error('Malformed Grok decision; no decision accepted'); }
   }
   async answer(question: string, context: string, options?: string[], signal?: AbortSignal): Promise<string> {
     const result = await this.ask('Return {"answer":"..."}. Use an exact option when provided; answer from the goal and verified repository evidence.', { question, options, context }, answerSchema, signal);

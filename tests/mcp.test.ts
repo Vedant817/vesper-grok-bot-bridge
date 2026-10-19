@@ -6,6 +6,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { request } from 'node:http';
+import { GrokReasoner } from '../src/grok.js';
 
 describe('real MCP loopback HTTP and legacy SSE', () => {
   const token = 'test-token-at-least-24-characters';
@@ -61,4 +62,33 @@ it('discovers current T3 runtime shape and refuses nonloopback endpoints', async
     expect(await discoverT3(path)).toEqual({ endpoint: 'http://127.0.0.1:1234/mcp' });
     expect(() => loopbackUrl('https://evil.invalid/mcp')).toThrow('loopback');
   } finally { await rm(directory, { recursive: true }); }
+});
+it('propagates HTTP request cancellation to the active task', async () => {
+  let runningSignal: AbortSignal | undefined;
+  let started!: () => void; const start = new Promise<void>(r => { started = r; });
+  const host = await serveHttp({ repository: process.cwd(), redactor: new Redactor(), run: async (_goal, signal) => {
+    runningSignal = signal; started();
+    await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+    return { state: 'stopped', turns: 0, reason: 'cancelled', worktree: process.cwd() };
+  } }, 'test-token-at-least-24-characters');
+  const connection = await McpConnection.connect(host.url + '/mcp', 'test-token-at-least-24-characters');
+  try {
+    const abort = new AbortController();
+    const result = connection.call('supervisor_run', { goal: 'test' }, abort.signal);
+    const rejected = expect(result).rejects.toThrow();
+    await start; abort.abort(new Error('owner stopped task')); await rejected;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(runningSignal?.aborted).toBe(true);
+  } finally { await connection.close(); await host.close(); }
+});
+it('never exposes provider error text or malformed decision fragments through MCP', async () => {
+  const secret = 'customer-sensitive-credential';
+  const reasoner = new GrokReasoner('key', 'model', new Redactor([secret]), async () => Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: secret }] }] }));
+  await expect(reasoner.answer('q', '')).rejects.toThrow('Malformed Grok decision');
+  const host = await serveHttp({ repository: process.cwd(), redactor: new Redactor([secret]), reasoner: { ...reasoner, answer: async () => { throw new Error(secret); }, evaluate: reasoner.evaluate.bind(reasoner) } }, 'test-token-at-least-24-characters');
+  const connection = await McpConnection.connect(host.url + '/mcp', 'test-token-at-least-24-characters');
+  try {
+    const result = await connection.client.callTool({ name: 'question_resolve', arguments: { question: 'q', context: '' } });
+    expect(result.isError).toBe(true); expect(JSON.stringify(result)).not.toContain('customer');
+  } finally { await connection.close(); await host.close(); }
 });

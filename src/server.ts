@@ -4,7 +4,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import express from 'express';
 import type { Server } from 'node:http';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Reasoner } from './contracts.js';
 import type { RunResult } from './supervisor.js';
@@ -19,6 +19,9 @@ export interface Services {
 export function createMcpServer(services: Services): McpServer {
   const server = new McpServer({ name: 'grok-autonomous-supervisor', version: '0.1.0' });
   const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: services.redactor.redact(JSON.stringify(value)) }] });
+  const lifetime = new AbortController();
+  server.server.onclose = () => lifetime.abort(new Error('MCP session closed'));
+  const guarded = async (work: () => Promise<unknown>) => { try { return result(await work()); } catch { return { isError: true, content: [{ type: 'text' as const, text: 'Operation failed; inspect local configuration and redacted run evidence.' }] }; } };
   server.registerTool('permission_evaluate', {
     description: 'Classify a structured operation using deterministic safety policy. Reports a verdict; never executes the operation.',
     inputSchema: { executable: z.string().max(256).optional(), args: z.array(z.string().max(4096)).max(100).optional(), command: z.string().max(8192).optional(), cwd: z.string().max(4096) },
@@ -29,14 +32,16 @@ export function createMcpServer(services: Services): McpServer {
     inputSchema: { question: z.string().min(1).max(2000), context: z.string().max(6000), options: z.array(z.string().max(256)).max(20).optional() },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true }
   }, async ({ question, context, options }, extra) => {
-    if (!services.reasoner) throw new Error('Grok model is not configured');
-    return result({ answer: await services.reasoner.answer(services.redactor.redact(question), services.redactor.redact(context), options?.map(o => services.redactor.redact(o)), extra.signal) });
+    return guarded(async () => {
+      if (!services.reasoner) throw new Error('Grok model is not configured');
+      return { answer: await services.reasoner.answer(services.redactor.redact(question), services.redactor.redact(context), options?.map(o => services.redactor.redact(o)), AbortSignal.any([extra.signal, lifetime.signal])) };
+    });
   });
   if (services.run) server.registerTool('supervisor_run', {
     description: 'Run one bounded task in a fresh git worktree using the owner-configured worker and verifier. Retains worktree; never merges or pushes.',
     inputSchema: { goal: z.string().min(1).max(4000) },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
-  }, async ({ goal }, extra) => result(await services.run!(goal, extra.signal)));
+  }, async ({ goal }, extra) => guarded(() => services.run!(goal, AbortSignal.any([extra.signal, lifetime.signal]))));
   return server;
 }
 export async function serveStdio(services: Services): Promise<McpServer> {
@@ -46,6 +51,7 @@ export async function serveHttp(services: Services, token: string, port = 0): Pr
   if (token.length < 24) throw new Error('MCP_SERVER_TOKEN must contain at least 24 characters');
   const app = express(), expected = createHash('sha256').update(`Bearer ${token}`).digest();
   const live = new Set<McpServer>();
+  const httpSessions = new Map<string, { server: McpServer; transport: StreamableHTTPServerTransport; timer?: NodeJS.Timeout }>();
   const sessions = new Map<string, { server: McpServer; transport: SSEServerTransport; timer: NodeJS.Timeout }>();
   app.use((req, res, next) => {
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(req.hostname)) { res.status(403).end(); return; }
@@ -54,15 +60,25 @@ export async function serveHttp(services: Services, token: string, port = 0): Pr
     next();
   });
   app.use(express.json({ limit: '64kb' }));
-  app.post('/mcp', async (req, res) => {
-    if (live.size >= 16) { res.status(429).end(); return; }
-    const server = createMcpServer(services); live.add(server);
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-    res.on('close', () => { live.delete(server); void server.close(); });
-    try { await server.connect(transport); await transport.handleRequest(req, res, req.body); }
-    catch { live.delete(server); await server.close().catch(() => {}); if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' }); }
+  app.all('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'];
+    let session = typeof sessionId === 'string' ? httpSessions.get(sessionId) : undefined;
+    if (!session) {
+      if (sessionId) { res.status(404).end(); return; }
+      if (req.method !== 'POST' || req.body?.method !== 'initialize') { res.status(405).end(); return; }
+      if (live.size >= 16) { res.status(429).end(); return; }
+      const server = createMcpServer(services); live.add(server);
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID, onsessioninitialized: id => { httpSessions.set(id, session!); } });
+      session = { server, transport };
+      const previous = server.server.onclose;
+      server.server.onclose = () => { previous?.(); live.delete(server); if (transport.sessionId) httpSessions.delete(transport.sessionId); clearTimeout(session?.timer); };
+      try { await server.connect(transport); } catch { live.delete(server); await server.close().catch(() => {}); res.status(500).end(); return; }
+    }
+    clearTimeout(session.timer);
+    session.timer = setTimeout(() => { void session!.server.close(); }, 3600000); session.timer.unref();
+    try { await session.transport.handleRequest(req, res, req.body); }
+    catch { await session.server.close().catch(() => {}); if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' }); }
   });
-  app.all('/mcp', (_req, res) => { res.status(405).end(); });
   app.get('/sse', async (_req, res) => {
     if (sessions.size >= 16) { res.status(429).end(); return; }
     const server = createMcpServer(services), transport = new SSEServerTransport('/messages', res);

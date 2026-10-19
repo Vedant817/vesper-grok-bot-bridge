@@ -20,6 +20,7 @@ import type { Services } from './server.js';
 
 export async function application(config: Config, reasonerOverride?: Reasoner): Promise<Services> {
   const repository = await realpath(config.repository);
+  if (within(repository, resolve(config.stateDirectory))) throw new Error('stateDirectory must be outside repository');
   await mkdir(resolve(config.stateDirectory), { recursive: true, mode: 0o700 });
   const state = await realpath(config.stateDirectory);
   if (within(repository, state)) throw new Error('stateDirectory must be outside repository');
