@@ -1,0 +1,11 @@
+{
+  "repository": "/absolute/path/to/repository",
+  "stateDirectory": "/absolute/path/outside/repository/supervisor-state",
+  "adapter": "codex",
+  "model": "grok-4.7",
+  "worker": { "executable": "codex", "args": ["app-server"] },
+  "verify": { "executable": "node", "args": ["scripts/verify.mjs"] },
+  "maxTurns": 5,
+  "maxEvents": 500,
+  "timeoutMs": 600000
+}

@@ -1,0 +1,8 @@
+{
+  "repository": "/absolute/path/to/repository",
+  "stateDirectory": "/absolute/path/outside/repository/supervisor-state",
+  "adapter": "acp",
+  "model": "grok-4.7",
+  "worker": { "executable": "/absolute/path/to/your-acp-agent", "args": ["--acp"] },
+  "verify": { "executable": "node", "args": ["scripts/verify.mjs"] }
+}

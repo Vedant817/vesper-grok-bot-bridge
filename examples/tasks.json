@@ -1,0 +1,4 @@
+[
+  { "id": "inspect", "goal": "Inspect the current API and report the exact defect without editing.", "dependsOn": [] },
+  { "id": "fix", "goal": "Reproduce and repair the defect described by the inspect milestone. Add a regression test.", "dependsOn": ["inspect"] }
+]

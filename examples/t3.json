@@ -1,0 +1,8 @@
+{
+  "repository": "/absolute/path/to/repository",
+  "stateDirectory": "/absolute/path/outside/repository/supervisor-state",
+  "adapter": "t3-mcp",
+  "projectId": "replace-with-your-t3-project-id",
+  "model": "grok-4.7",
+  "verify": { "executable": "node", "args": ["scripts/verify.mjs"] }
+}
