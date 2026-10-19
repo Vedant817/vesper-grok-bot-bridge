@@ -12,6 +12,7 @@ describe('permission firewall', () => {
   const root = process.cwd();
   it('approves only a structured known read', () => {
     expect(classifyPermission({ executable: 'git', args: ['status', '--short'], cwd: root }, root).allow).toBe(true);
+    expect(classifyPermission({ executable: 'git status', args: ['--short'], cwd: root }, root).allow).toBe(false);
   });
   it.each(['rm -rf /', 'git push --force', 'Remove-Item -Recurse C:\\', 'cat .env', 'DROP TABLE users'])('blocks %s', command => {
     expect(classifyPermission({ command, cwd: root }, root).risk).toBe('blocked');
@@ -36,6 +37,11 @@ describe('redaction and memory', () => {
     const records = new RedactedRecords(new Redactor(), 8);
     records.push('a'.repeat(100));
     expect(records.push('secret\n')).toEqual(['[OVERSIZED RECORD REDACTED]']);
+  });
+  it('redacts PEM blocks across lines and chunks and multiline configured secrets', () => {
+    const records = new RedactedRecords(new Redactor(['one\ntwo']));
+    const out = [...records.push('-----BEGIN PRIVATE KEY-----\nQUJD'), ...records.push('REVGR0g=\n-----END PRIVATE KEY-----\none\ntwo\n')].join('\n');
+    expect(out).not.toContain('QUJD'); expect(out).not.toContain('REVGR0g'); expect(out).not.toContain('one'); expect(out).not.toContain('two');
   });
   it('bounds UTF-8 working context and persists redacted cold records', async () => {
     const path = await mkdtemp(join(tmpdir(), 'grok-memory-'));
@@ -87,5 +93,16 @@ describe('worktree and supervisor integration', () => {
     const { w, closed } = worker([]); w.next = async () => new Promise(() => {});
     const result = await new Supervisor(w, reasoner, new Memory(join(base, 'cold'), new Redactor()), async () => ({ passed: true, output: '' })).run({ cwd, goal: 'task', timeoutMs: 30 });
     expect(result.state).toBe('failed'); expect(closed()).toBe(true);
+  });
+  it('redacts question options and goal before model calls', async () => {
+    const { w } = worker([{ type: 'question', id: 'q', question: 'Language?', options: ['sensitive-choice'] }, { type: 'completed', summary: 'done' }]);
+    const model: Reasoner = { answer: async (_q, _c, opts) => { expect(opts).toEqual(['[REDACTED]']); return 'ok'; }, evaluate: async goal => { expect(goal).toBe('[REDACTED]'); return { accept: true, feedback: 'ok' }; } };
+    await new Supervisor(w, model, new Memory(join(base, 'cold'), new Redactor(['sensitive-choice'])), async () => ({ passed: true, output: 'ok' }), new Redactor(['sensitive-choice'])).run({ cwd, goal: 'sensitive-choice' });
+  });
+  it('bounds a hung close', async () => {
+    const { w } = worker([{ type: 'failed', error: 'test' }]); w.close = async () => new Promise(() => {});
+    const start = Date.now();
+    const result = await new Supervisor(w, reasoner, new Memory(join(base, 'cold'), new Redactor()), async () => ({ passed: true, output: '' })).run({ cwd, goal: 'test', timeoutMs: 10 });
+    expect(result.state).toBe('failed'); expect(Date.now() - start).toBeLessThan(3000);
   });
 });

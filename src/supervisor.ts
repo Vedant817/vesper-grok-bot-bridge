@@ -37,7 +37,7 @@ export class Supervisor {
           const key = createHash('sha256').update(event.question).digest('hex');
           seen.set(key, (seen.get(key) ?? 0) + 1);
           if (seen.get(key)! > 2) return { state: 'stopped', reason: 'Repeated question loop', turns };
-          const answer = await race(this.reasoner.answer(this.redactor.redact(event.question), this.memory.context(), event.options, signal));
+          const answer = await race(this.reasoner.answer(this.redactor.redact(event.question), this.memory.context(), event.options?.map(o => this.redactor.redact(o)), signal));
           await race(this.worker.respond(event.id, { allow: false, answer: this.redactor.redact(answer) }));
         } else {
           turns++;
@@ -45,7 +45,7 @@ export class Supervisor {
           const diff = await changes(config.cwd);
           const evidence = this.redactor.redact(JSON.stringify({ summary: event.summary, verification: proof, diff }));
           await this.memory.append({ evidence });
-          const judgement = await race(this.reasoner.evaluate(config.goal, evidence, signal));
+          const judgement = await race(this.reasoner.evaluate(this.redactor.redact(config.goal), evidence, signal));
           if (proof.passed && judgement.accept) return { state: 'completed', reason: this.redactor.redact(judgement.feedback), turns };
           const fingerprint = createHash('sha256').update(JSON.stringify({ diff, passed: proof.passed, output: proof.output })).digest('hex');
           seen.set(fingerprint, (seen.get(fingerprint) ?? 0) + 1);
@@ -58,7 +58,7 @@ export class Supervisor {
     finally {
       // Cleanup has its own deadline because the run signal may already be aborted.
       await Promise.race([this.worker.cancel().catch(() => {}), new Promise<void>(r => { const t = setTimeout(r, 2000); t.unref(); })]);
-      await this.worker.close().catch(() => {});
+      await Promise.race([this.worker.close().catch(() => {}), new Promise<void>(r => { const t = setTimeout(r, 2000); t.unref(); })]);
     }
   }
 }

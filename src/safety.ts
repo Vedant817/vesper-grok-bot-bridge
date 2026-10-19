@@ -14,8 +14,8 @@ export function classifyPermission(request: Permission, root: string): Verdict {
   if (!request.executable || request.command) return deny('guarded', 'Unstructured shell commands require explicit policy');
   const args = request.args ?? [];
   if (args.some(a => /[\x00-\x1f;&|<>`$!*?]/.test(a) || a.startsWith('-C') || a.startsWith('--git-dir') || a.startsWith('--work-tree') || a.includes('..') || isAbsolute(a))) return deny('guarded', 'Ambiguous argument or path');
-  const key = [request.executable, ...args].join(' ');
-  if (['git status --short', 'git status --porcelain', 'git diff --stat', 'git diff --numstat', 'git rev-parse HEAD', 'git log -1 --oneline'].includes(key)) return { risk: 'safe', allow: true, reason: 'Known read-only git operation' };
+  const key = JSON.stringify(args);
+  if (request.executable === 'git' && [['status', '--short'], ['status', '--porcelain'], ['diff', '--stat'], ['diff', '--numstat'], ['rev-parse', 'HEAD'], ['log', '-1', '--oneline']].some(a => JSON.stringify(a) === key)) return { risk: 'safe', allow: true, reason: 'Known read-only git operation' };
   return deny('guarded', 'Operation is outside the read-only allowlist');
 }
 
@@ -28,7 +28,7 @@ export class Redactor {
   constructor(private readonly secrets: readonly string[] = []) {}
   redact(input: string): string {
     let text = input;
-    for (const secret of [...this.secrets].filter(Boolean).sort((a, b) => b.length - a.length)) text = text.split(secret).join('[REDACTED]');
+    for (const secret of [...this.secrets.flatMap(s => [s, ...s.split(/\r?\n/)])].filter(Boolean).sort((a, b) => b.length - a.length)) text = text.split(secret).join('[REDACTED]');
     return text
       .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, '[REDACTED PRIVATE KEY]')
       .replace(/\b(?:sk-|xai-|ghp_|github_pat_)[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
@@ -41,17 +41,22 @@ export class Redactor {
 export class RedactedRecords {
   private buffer = '';
   private dropping = false;
+  private privateKey = false;
   constructor(private readonly redactor: Redactor, private readonly maxRecord = 65536) {}
   push(chunk: string): string[] {
     const lines = (this.buffer + chunk).split('\n');
     this.buffer = lines.pop()!;
     const output: string[] = [];
     for (const line of lines) {
-      output.push(this.dropping || line.length > this.maxRecord ? '[OVERSIZED RECORD REDACTED]' : this.redactor.redact(line));
+      const startsKey = /-----BEGIN [^-]*PRIVATE KEY-----/.test(line);
+      const endsKey = /-----END [^-]*PRIVATE KEY-----/.test(line);
+      output.push(this.privateKey || startsKey ? '[REDACTED PRIVATE KEY]' : this.dropping || line.length > this.maxRecord ? '[OVERSIZED RECORD REDACTED]' : this.redactor.redact(line));
+      if (startsKey) this.privateKey = true;
+      if (endsKey) this.privateKey = false;
       this.dropping = false;
     }
     if (this.buffer.length > this.maxRecord) { this.buffer = ''; this.dropping = true; }
     return output;
   }
-  end(): string { const result = this.dropping ? '[OVERSIZED RECORD REDACTED]' : this.redactor.redact(this.buffer); this.buffer = ''; this.dropping = false; return result; }
+  end(): string { const result = this.privateKey ? '[REDACTED PRIVATE KEY]' : this.dropping ? '[OVERSIZED RECORD REDACTED]' : this.redactor.redact(this.buffer); this.buffer = ''; this.dropping = false; this.privateKey = false; return result; }
 }

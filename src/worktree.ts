@@ -1,6 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { promisify } from 'node:util';
-import { mkdir, realpath } from 'node:fs/promises';
+import { mkdir, realpath, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { within } from './safety.js';
@@ -25,9 +27,22 @@ export async function verifyWorktree(path: string): Promise<void> {
   const common = await git(actual, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (actual !== top || gitDir === await realpath(common)) throw new Error('An isolated linked git worktree root is required');
 }
-export interface ChangeSummary { status: string; entries: string[]; truncated: boolean }
+export interface ChangeSummary { status: string; entries: string[]; truncated: boolean; contentHash: string }
 export async function changes(cwd: string): Promise<ChangeSummary> {
   const status = await git(cwd, ['status', '--porcelain=v1']);
   const entries = (await git(cwd, ['diff', '--numstat', 'HEAD'])).split('\n').filter(Boolean);
-  return { status: status.slice(0, 12000), entries: entries.slice(0, 200), truncated: status.length > 12000 || entries.length > 200 };
+  const hash = createHash('sha256');
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('git', ['diff', '--no-ext-diff', '--no-textconv', '--binary', 'HEAD'], { cwd, windowsHide: true, timeout: 30000 });
+    child.stdout.on('data', chunk => hash.update(chunk)); child.stderr.resume(); child.on('error', reject);
+    child.on('close', code => code === 0 ? resolve() : reject(new Error('Diff hashing failed')));
+  });
+  const untracked = (await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
+  for (const name of untracked.slice(0, 200)) {
+    hash.update(name);
+    const path = join(cwd, name); const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink()) { hash.update('nonregular'); continue; }
+    for await (const chunk of createReadStream(path)) hash.update(chunk);
+  }
+  return { status: status.slice(0, 12000), entries: entries.slice(0, 200), truncated: status.length > 12000 || entries.length > 200 || untracked.length > 200, contentHash: hash.digest('hex') };
 }
