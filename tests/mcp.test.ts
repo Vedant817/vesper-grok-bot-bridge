@@ -81,6 +81,17 @@ it('propagates HTTP request cancellation to the active task', async () => {
     expect(runningSignal?.aborted).toBe(true);
   } finally { await connection.close(); await host.close(); }
 });
+it('releases failed initialize requests before the session cap is exhausted', async () => {
+  const token = 'test-token-at-least-24-characters';
+  const host = await serveHttp({ repository: process.cwd(), redactor: new Redactor() }, token);
+  try {
+    for (let i = 0; i < 17; i++) {
+      const response = await fetch(host.url + '/mcp', { method: 'POST', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: i, method: 'initialize', params: {} }) });
+      expect(response.status).toBe(400); await response.body?.cancel();
+    }
+    const connection = await McpConnection.connect(host.url + '/mcp', token); await connection.close();
+  } finally { await host.close(); }
+});
 it('never exposes provider error text or malformed decision fragments through MCP', async () => {
   const secret = 'customer-sensitive-credential';
   const reasoner = new GrokReasoner('key', 'model', new Redactor([secret]), async () => Response.json({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: secret }] }] }));

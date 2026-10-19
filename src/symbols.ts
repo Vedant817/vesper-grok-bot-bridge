@@ -8,7 +8,8 @@ function symbols(path: string, source: string): Map<string, string> {
   const visit = (node: ts.Node, scope: string) => {
     let name: string | undefined;
     if ((ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name) name = node.name.getText(file);
-    else if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) name = node.name.getText(file);
+    else if (ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer) || ts.isObjectLiteralExpression(node.initializer))) name = node.name.getText(file);
+    else if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.initializer)) name = node.name.getText(file);
     const key = name ? `${scope}${scope ? '.' : ''}${name}` : scope;
     if (name) result.set(key, createHash('sha256').update(node.getText(file)).digest('hex'));
     ts.forEachChild(node, child => visit(child, key));

@@ -51,7 +51,7 @@ export class Supervisor {
           const tail = stream.end(); if (tail) await this.memory.append({ type: 'output', text: tail });
           const proof = await race(() => this.verify(config.cwd, signal));
           const diff = await changes(config.cwd);
-          const evidence = this.redactor.redact(JSON.stringify({ summary: event.summary, verification: proof, diff }));
+          const evidence = this.redactor.json({ summary: event.summary, verification: proof, diff });
           await this.memory.append({ evidence });
           const judgement = await race(() => this.reasoner.evaluate(this.redactor.redact(config.goal), evidence, signal));
           if (proof.passed && judgement.accept) return { state: 'completed', reason: this.redactor.redact(judgement.feedback), turns };

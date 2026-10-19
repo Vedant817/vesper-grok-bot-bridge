@@ -57,7 +57,7 @@ export async function application(config: Config, reasonerOverride?: Reasoner): 
       const memory = new Memory(join(directory, 'cold'), redactor);
       const supervisor = new Supervisor(worker, reasoner, memory, verifier(config.verify.executable, config.verify.args, redactor, config.verify.env), redactor);
       const result = { ...await supervisor.run({ cwd, goal, maxTurns: config.maxTurns, maxEvents: config.maxEvents, timeoutMs: config.timeoutMs, signal: runSignal }), worktree: cwd };
-      await writeFile(join(directory, 'result.json'), redactor.redact(JSON.stringify(result, null, 2)), { mode: 0o600 });
+      await writeFile(join(directory, 'result.json'), redactor.json(result), { mode: 0o600 });
       return result;
     } catch (e) { throw new Error(redactor.redact(`${String(e)}${cwd ? `; retained worktree: ${cwd}` : ''}`)); }
     finally { active = false; }

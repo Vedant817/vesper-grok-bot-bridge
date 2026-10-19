@@ -33,6 +33,10 @@ describe('redaction and memory', () => {
     expect(records.push('bearer top')).toEqual([]);
     expect(records.push('secret\n')).toEqual(['bearer [REDACTED]']);
   });
+  it('redacts values before JSON escaping while preserving valid JSON', () => {
+    const redactor = new Redactor(['abc"def']);
+    expect(JSON.parse(redactor.json({ text: 'abc"def' }))).toEqual({ text: '[REDACTED]' });
+  });
   it('does not leak overflow fragments', () => {
     const records = new RedactedRecords(new Redactor(), 8);
     records.push('a'.repeat(100));
@@ -116,5 +120,11 @@ describe('worktree and supervisor integration', () => {
     const before = await changes(cwd);
     await writeFile(join(cwd, 'file-201.txt'), 'b');
     expect((await changes(cwd)).contentHash).not.toBe(before.contentHash);
+  });
+  it('separates untracked file hash boundaries', async () => {
+    await writeFile(join(cwd, 'a.txt'), 'x'); await writeFile(join(cwd, 'b.txt'), 'b.txty');
+    const before = (await changes(cwd)).contentHash;
+    await writeFile(join(cwd, 'a.txt'), 'xb.txt'); await writeFile(join(cwd, 'b.txt'), 'y');
+    expect((await changes(cwd)).contentHash).not.toBe(before);
   });
 });

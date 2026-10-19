@@ -41,10 +41,12 @@ export async function changes(cwd: string): Promise<ChangeSummary> {
   });
   const untracked = (await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'], true)).split('\0').filter(Boolean);
   for (const name of untracked) {
-    hash.update(name);
+    hash.update(JSON.stringify(name) + '\0');
     const path = join(cwd, name); const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink()) { hash.update('nonregular'); continue; }
-    for await (const chunk of createReadStream(path)) hash.update(chunk);
+    const fileHash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) fileHash.update(chunk);
+    hash.update(fileHash.digest('hex') + '\0');
   }
   const tracked = (await git(cwd, ['diff', '--name-only', '-z', 'HEAD'], true)).split('\0').filter(Boolean);
   const summaries: ChangeSummary['symbols'] = [];

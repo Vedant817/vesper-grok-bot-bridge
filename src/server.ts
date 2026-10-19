@@ -18,7 +18,7 @@ export interface Services {
 }
 export function createMcpServer(services: Services): McpServer {
   const server = new McpServer({ name: 'grok-autonomous-supervisor', version: '0.1.0' });
-  const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: services.redactor.redact(JSON.stringify(value)) }] });
+  const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: services.redactor.json(value) }] });
   const lifetime = new AbortController();
   server.server.onclose = () => lifetime.abort(new Error('MCP session closed'));
   const guarded = async (work: () => Promise<unknown>) => { try { return result(await work()); } catch { return { isError: true, content: [{ type: 'text' as const, text: 'Operation failed; inspect local configuration and redacted run evidence.' }] }; } };
@@ -76,7 +76,7 @@ export async function serveHttp(services: Services, token: string, port = 0): Pr
     }
     clearTimeout(session.timer);
     session.timer = setTimeout(() => { void session!.server.close(); }, 3600000); session.timer.unref();
-    try { await session.transport.handleRequest(req, res, req.body); }
+    try { await session.transport.handleRequest(req, res, req.body); if (!session.transport.sessionId) await session.server.close(); }
     catch { await session.server.close().catch(() => {}); if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' }); }
   });
   app.get('/sse', async (_req, res) => {

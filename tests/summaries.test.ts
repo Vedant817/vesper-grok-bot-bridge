@@ -5,6 +5,7 @@ it('summarizes changed AST functions without carrying function bodies', () => {
   const before = 'export function unchanged(){return 1;} export function changed(){return 2;}';
   const after = 'export function unchanged(){return 1;} export function changed(){return 3;} const added=()=>4;';
   expect(touchedSymbols('sample.ts', before, after)).toEqual(['changed', 'added']);
+  expect(touchedSymbols('sample.ts', 'const a={m(){return 1}}; const b={m(){return 2}};', 'const a={m(){return 9}}; const b={m(){return 2}};')).toContain('a.m');
 });
 it('skips failed dependencies and continues independent isolated milestones', async () => {
   const calls: string[] = [];
