@@ -42,6 +42,7 @@ export class RedactedRecords {
   private buffer = '';
   private dropping = false;
   private privateKey = false;
+  private overflowed = false;
   constructor(private readonly redactor: Redactor, private readonly maxRecord = 65536) {}
   push(chunk: string): string[] {
     const lines = (this.buffer + chunk).split('\n');
@@ -50,13 +51,13 @@ export class RedactedRecords {
     for (const line of lines) {
       const startsKey = /-----BEGIN [^-]*PRIVATE KEY-----/.test(line);
       const endsKey = /-----END [^-]*PRIVATE KEY-----/.test(line);
-      output.push(this.privateKey || startsKey ? '[REDACTED PRIVATE KEY]' : this.dropping || line.length > this.maxRecord ? '[OVERSIZED RECORD REDACTED]' : this.redactor.redact(line));
+      output.push(this.overflowed || this.dropping || line.length > this.maxRecord ? '[OVERSIZED RECORD REDACTED]' : this.privateKey || startsKey ? '[REDACTED PRIVATE KEY]' : this.redactor.redact(line));
       if (startsKey) this.privateKey = true;
       if (endsKey) this.privateKey = false;
       this.dropping = false;
     }
-    if (this.buffer.length > this.maxRecord) { this.buffer = ''; this.dropping = true; }
+    if (this.buffer.length > this.maxRecord) { this.buffer = ''; this.dropping = true; this.overflowed = true; }
     return output;
   }
-  end(): string { const result = this.privateKey ? '[REDACTED PRIVATE KEY]' : this.dropping ? '[OVERSIZED RECORD REDACTED]' : this.redactor.redact(this.buffer); this.buffer = ''; this.dropping = false; this.privateKey = false; return result; }
+  end(): string { const result = this.overflowed || this.dropping ? '[OVERSIZED RECORD REDACTED]' : this.privateKey ? '[REDACTED PRIVATE KEY]' : this.redactor.redact(this.buffer); this.buffer = ''; this.dropping = false; this.privateKey = false; this.overflowed = false; return result; }
 }

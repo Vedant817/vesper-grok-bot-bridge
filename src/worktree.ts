@@ -8,8 +8,9 @@ import { randomUUID } from 'node:crypto';
 import { within } from './safety.js';
 
 const exec = promisify(execFile);
-export async function git(cwd: string, args: string[]): Promise<string> {
-  return (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024, windowsHide: true })).stdout.trim();
+export async function git(cwd: string, args: string[], raw = false): Promise<string> {
+  const output = (await exec('git', args, { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024, windowsHide: true })).stdout;
+  return raw ? output : output.trim();
 }
 export async function createWorktree(repository: string, directory: string): Promise<string> {
   const repo = await realpath(repository);
@@ -37,8 +38,8 @@ export async function changes(cwd: string): Promise<ChangeSummary> {
     child.stdout.on('data', chunk => hash.update(chunk)); child.stderr.resume(); child.on('error', reject);
     child.on('close', code => code === 0 ? resolve() : reject(new Error('Diff hashing failed')));
   });
-  const untracked = (await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
-  for (const name of untracked.slice(0, 200)) {
+  const untracked = (await git(cwd, ['ls-files', '--others', '--exclude-standard', '-z'], true)).split('\0').filter(Boolean);
+  for (const name of untracked) {
     hash.update(name);
     const path = join(cwd, name); const info = await lstat(path);
     if (!info.isFile() || info.isSymbolicLink()) { hash.update('nonregular'); continue; }

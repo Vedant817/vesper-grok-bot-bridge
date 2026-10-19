@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyPermission, Redactor, RedactedRecords } from '../src/safety.js';
 import { Memory } from '../src/memory.js';
-import { git, createWorktree, verifyWorktree } from '../src/worktree.js';
+import { git, createWorktree, verifyWorktree, changes } from '../src/worktree.js';
 import { Supervisor } from '../src/supervisor.js';
 import type { Worker, WorkerEvent, Reasoner } from '../src/contracts.js';
 
@@ -42,6 +42,11 @@ describe('redaction and memory', () => {
     const records = new RedactedRecords(new Redactor(['one\ntwo']));
     const out = [...records.push('-----BEGIN PRIVATE KEY-----\nQUJD'), ...records.push('REVGR0g=\n-----END PRIVATE KEY-----\none\ntwo\n')].join('\n');
     expect(out).not.toContain('QUJD'); expect(out).not.toContain('REVGR0g'); expect(out).not.toContain('one'); expect(out).not.toContain('two');
+  });
+  it('fails closed after oversized incomplete block markers', () => {
+    const records = new RedactedRecords(new Redactor(), 32);
+    records.push('x'.repeat(40) + '-----BEGIN PRIVATE KEY-----');
+    expect(records.push('\nQUJDREVGR0g=\n-----END PRIVATE KEY-----\n').join()).not.toContain('QUJD');
   });
   it('bounds UTF-8 working context and persists redacted cold records', async () => {
     const path = await mkdtemp(join(tmpdir(), 'grok-memory-'));
@@ -104,5 +109,12 @@ describe('worktree and supervisor integration', () => {
     const start = Date.now();
     const result = await new Supervisor(w, reasoner, new Memory(join(base, 'cold'), new Redactor()), async () => ({ passed: true, output: '' })).run({ cwd, goal: 'test', timeoutMs: 10 });
     expect(result.state).toBe('failed'); expect(Date.now() - start).toBeLessThan(3000);
+  });
+  it('fingerprints whitespace filenames and changes beyond 200 untracked files', async () => {
+    await writeFile(join(cwd, ' first.txt'), 'a');
+    for (let i = 0; i < 202; i++) await writeFile(join(cwd, `file-${String(i).padStart(3, '0')}.txt`), 'a');
+    const before = await changes(cwd);
+    await writeFile(join(cwd, 'file-201.txt'), 'b');
+    expect((await changes(cwd)).contentHash).not.toBe(before.contentHash);
   });
 });
