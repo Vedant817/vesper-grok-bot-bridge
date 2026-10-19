@@ -36,6 +36,7 @@ describe('redaction and memory', () => {
   it('redacts values before JSON escaping while preserving valid JSON', () => {
     const redactor = new Redactor(['abc"def']);
     expect(JSON.parse(redactor.json({ text: 'abc"def' }))).toEqual({ text: '[REDACTED]' });
+    expect(JSON.parse(new Redactor().json({ password: 'hunter2', api_key: 'unprefixedvalue', nested: { token: 'plain-session-value' } }))).toEqual({ password: '[REDACTED]', api_key: '[REDACTED]', nested: { token: '[REDACTED]' } });
   });
   it('does not leak overflow fragments', () => {
     const records = new RedactedRecords(new Redactor(), 8);

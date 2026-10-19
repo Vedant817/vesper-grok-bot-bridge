@@ -27,7 +27,7 @@ export function within(root: string, candidate: string): boolean {
 export class Redactor {
   constructor(private readonly secrets: readonly string[] = []) {}
   json(value: unknown): string {
-    const text = JSON.stringify(value, (_key, item) => typeof item === 'string' ? this.redact(item) : item);
+    const text = JSON.stringify(value, (key, item) => /^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|private[_-]?key|authorization)$/i.test(key) ? '[REDACTED]' : typeof item === 'string' ? this.redact(item) : item);
     if (text === undefined) throw new Error('A JSON value is required');
     return text;
   }
