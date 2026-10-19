@@ -1,4 +1,5 @@
 export interface Task { id: string; goal: string; dependsOn: string[] }
+export interface TaskResult { state: 'completed' | 'stopped' | 'failed' | 'skipped'; reason: string; worktree?: string }
 /** Validate the complete DAG before any worker side effects. Execute one isolated
  * milestone at a time; dependencies never proceed after a stopped/failed task. */
 export function orderTasks(tasks: readonly Task[]): Task[] {
@@ -14,4 +15,14 @@ export function orderTasks(tasks: readonly Task[]): Task[] {
   }
   for (const task of tasks) visit(task.id);
   return result;
+}
+export async function runTaskGraph(tasks: readonly Task[], execute: (task: Task, dependencies: Record<string, TaskResult>) => Promise<TaskResult>): Promise<Record<string, TaskResult>> {
+  const ordered = orderTasks(tasks), results: Record<string, TaskResult> = Object.create(null);
+  for (const task of ordered) {
+    const dependencies = Object.fromEntries(task.dependsOn.map(id => [id, results[id]]));
+    if (Object.values(dependencies).some(result => result.state !== 'completed')) { results[task.id] = { state: 'skipped', reason: 'Dependency did not complete' }; continue; }
+    try { results[task.id] = await execute(task, dependencies); }
+    catch (error) { results[task.id] = { state: 'failed', reason: String(error) }; }
+  }
+  return results;
 }

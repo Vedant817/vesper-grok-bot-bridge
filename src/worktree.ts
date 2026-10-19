@@ -2,10 +2,11 @@ import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { promisify } from 'node:util';
-import { mkdir, realpath, lstat } from 'node:fs/promises';
+import { mkdir, realpath, lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { within } from './safety.js';
+import { touchedSymbols } from './symbols.js';
 
 const exec = promisify(execFile);
 export async function git(cwd: string, args: string[], raw = false): Promise<string> {
@@ -28,7 +29,7 @@ export async function verifyWorktree(path: string): Promise<void> {
   const common = await git(actual, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (actual !== top || gitDir === await realpath(common)) throw new Error('An isolated linked git worktree root is required');
 }
-export interface ChangeSummary { status: string; entries: string[]; truncated: boolean; contentHash: string }
+export interface ChangeSummary { status: string; entries: string[]; truncated: boolean; contentHash: string; symbols: { file: string; touched: string[] }[] }
 export async function changes(cwd: string): Promise<ChangeSummary> {
   const status = await git(cwd, ['status', '--porcelain=v1']);
   const entries = (await git(cwd, ['diff', '--numstat', 'HEAD'])).split('\n').filter(Boolean);
@@ -45,5 +46,14 @@ export async function changes(cwd: string): Promise<ChangeSummary> {
     if (!info.isFile() || info.isSymbolicLink()) { hash.update('nonregular'); continue; }
     for await (const chunk of createReadStream(path)) hash.update(chunk);
   }
-  return { status: status.slice(0, 12000), entries: entries.slice(0, 200), truncated: status.length > 12000 || entries.length > 200 || untracked.length > 200, contentHash: hash.digest('hex') };
+  const tracked = (await git(cwd, ['diff', '--name-only', '-z', 'HEAD'], true)).split('\0').filter(Boolean);
+  const summaries: ChangeSummary['symbols'] = [];
+  for (const name of [...new Set([...tracked, ...untracked])].filter(n => /\.[cm]?[jt]sx?$/.test(n)).slice(0, 100)) {
+    const path = join(cwd, name), info = await lstat(path).catch(() => undefined);
+    if (info && (!info.isFile() || info.size > 1024 * 1024 || !within(cwd, await realpath(path)))) { summaries.push({ file: name, touched: ['[omitted: large or nonregular file]'] }); continue; }
+    const before = await git(cwd, ['show', `HEAD:${name}`], true).catch(() => '');
+    const after = info ? await readFile(path, 'utf8') : '';
+    summaries.push({ file: name, touched: touchedSymbols(name, before, after) });
+  }
+  return { status: status.slice(0, 12000), entries: entries.slice(0, 200), truncated: status.length > 12000 || entries.length > 200 || untracked.length > 200, contentHash: hash.digest('hex'), symbols: summaries };
 }

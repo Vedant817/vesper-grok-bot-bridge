@@ -6,6 +6,8 @@ import { configSchema } from './config.js';
 import { application } from './application.js';
 import { serveHttp, serveStdio } from './server.js';
 import { Redactor } from './safety.js';
+import { z } from 'zod';
+import { runTaskGraph } from './task-graph.js';
 export { Supervisor } from './supervisor.js';
 export { Memory } from './memory.js';
 export { GrokReasoner } from './grok.js';
@@ -17,21 +19,32 @@ export { T3Worker } from './adapters/t3.js';
 export { PtyWorker } from './adapters/pty.js';
 export { McpConnection } from './adapters/mcp.js';
 export { createMcpServer, serveHttp, serveStdio } from './server.js';
-export { orderTasks } from './task-graph.js';
+export { orderTasks, runTaskGraph } from './task-graph.js';
 export type { Worker, WorkerEvent, Reasoner } from './contracts.js';
 export type { Config } from './config.js';
+async function readJson(file: string): Promise<unknown> {
+  try { return JSON.parse(await readFile(resolve(file), 'utf8')); }
+  catch { throw new Error('Unable to read valid JSON from the supplied configuration file'); }
+}
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [mode, file, ...rest] = args;
   if (!mode || mode === '--help') {
-    console.log('Usage: grok-supervisor run <config.json> <goal>\n       grok-supervisor serve-stdio <config.json>\n       grok-supervisor serve-http <config.json> [port]\n\nCredentials: XAI_API_KEY, T3_BEARER_TOKEN, MCP_SERVER_TOKEN. Config commands are trusted owner input.'); return;
+    console.log('Usage: grok-supervisor run <config.json> <goal>\n       grok-supervisor run-plan <config.json> <tasks.json>\n       grok-supervisor serve-stdio <config.json>\n       grok-supervisor serve-http <config.json> [port]\n\nCredentials: XAI_API_KEY, T3_BEARER_TOKEN, MCP_SERVER_TOKEN. Config commands are trusted owner input.'); return;
   }
-  if (!['run', 'serve-stdio', 'serve-http'].includes(mode) || !file) throw new Error('Invalid command; use --help');
-  const config = configSchema.parse(JSON.parse(await readFile(resolve(file), 'utf8')));
+  if (!['run', 'run-plan', 'serve-stdio', 'serve-http'].includes(mode) || !file) throw new Error('Invalid command; use --help');
+  const config = configSchema.parse(await readJson(file));
   const services = await application(config), abort = new AbortController();
   const stop = () => abort.abort(new Error('Interrupted'));
   process.once('SIGINT', stop); process.once('SIGTERM', stop);
-  if (mode === 'run') {
+  if (mode === 'run-plan') {
+    if (!rest[0]) throw new Error('Task plan JSON path required');
+    const tasks = z.array(z.object({ id: z.string().min(1), goal: z.string().min(1).max(3000), dependsOn: z.array(z.string()) }).strict()).min(1).max(100).parse(await readJson(rest[0]));
+    try {
+      const results = await runTaskGraph(tasks, async (task, dependencies) => services.run!(`${task.goal}\nCompleted dependency worktrees (read-only context; do not mutate): ${JSON.stringify(dependencies)}`, abort.signal));
+      console.log(JSON.stringify(results, null, 2)); if (Object.values(results).some(r => r.state !== 'completed')) process.exitCode = 1;
+    } finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
+  } else if (mode === 'run') {
     const goal = rest.join(' '); if (!goal) throw new Error('A nonempty task goal is required');
     try { const result = await services.run!(goal, abort.signal); console.log(JSON.stringify(result, null, 2)); if (result.state !== 'completed') process.exitCode = 1; }
     finally { process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }

@@ -6,9 +6,12 @@ export abstract class RpcWorker implements Worker {
   protected queue = new AsyncQueue<WorkerEvent>();
   protected pending = new Map<string, RpcMessage>();
   protected cwd = '';
+  private closed = false;
   constructor(protected readonly connect: (cwd: string) => Promise<Wire>, private readonly jsonrpc = true) {}
   protected async open(cwd: string): Promise<Rpc> {
-    this.cwd = cwd; const rpc = this.rpc = new Rpc(await this.connect(cwd), 120000, this.jsonrpc);
+    this.cwd = cwd; const wire = await this.connect(cwd);
+    if (this.closed) { wire.close(); throw new Error('Worker closed while connecting'); }
+    const rpc = this.rpc = new Rpc(wire, 120000, this.jsonrpc);
     rpc.onClose = error => this.queue.close(error);
     rpc.onRequest = message => {
       if (this.pending.size >= 100) { rpc.reject(message.id!, 'Too many pending requests'); return; }
@@ -27,6 +30,6 @@ export abstract class RpcWorker implements Worker {
   abstract steer(message: string): Promise<void>;
   abstract cancel(): Promise<void>;
   next(signal: AbortSignal): Promise<WorkerEvent> { return this.queue.next(signal); }
-  async close(): Promise<void> { this.rpc?.close(); this.pending.clear(); this.queue.close(); }
+  async close(): Promise<void> { this.closed = true; this.rpc?.close(); this.pending.clear(); this.queue.close(); }
   protected take(id: string): RpcMessage { const message = this.pending.get(id); if (!message) throw new Error('Unknown or already answered request'); this.pending.delete(id); return message; }
 }

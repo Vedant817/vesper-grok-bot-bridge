@@ -18,8 +18,16 @@ export class T3Worker implements Worker {
     const branch = await git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '');
     const result = t3Thread.parse(await this.mcp.call('t3_thread_launch', { projectId: this.projectId, title: this.title, message: task, runtimeMode: 'approval-required', workspaceStrategy: { type: 'existing_worktree', worktreePath: cwd, ...(branch ? { branch } : {}) } }));
     this.thread = result.threadId; this.run = result.runId;
-    const state = await this.mcp.call('t3_thread_read', { threadId: this.thread, limit: 1 });
-    if (!state.thread?.worktreePath || await realpath(state.thread.worktreePath) !== await realpath(cwd)) { await this.cancel(); throw new Error('T3 workspace binding mismatch'); }
+    for (let attempt = 0; attempt < 40 && !this.stopped; attempt++) {
+      const state = await this.mcp.call('t3_thread_read', { threadId: this.thread, limit: 1 });
+      if (state.thread?.worktreePath) {
+        if (await realpath(state.thread.worktreePath) === await realpath(cwd)) return;
+        await this.cancel(); throw new Error('T3 workspace binding mismatch');
+      }
+      if (!['preparing', 'queued', 'starting'].includes(state.thread?.status)) break;
+      await delay(250);
+    }
+    await this.cancel(); throw new Error('T3 workspace binding was not confirmed before preparation limit');
   }
   async next(signal: AbortSignal): Promise<WorkerEvent> {
     while (!signal.aborted && !this.stopped) {
@@ -37,6 +45,10 @@ export class T3Worker implements Worker {
       if (this.events.length) continue;
       const state = await this.mcp.call('t3_thread_wait', { threadId: this.thread, ...(this.run ? { runId: this.run } : {}), timeoutMs: 1000 }, signal);
       if (state.runId) this.run = state.runId;
+      if (state.status === 'waiting' && pending.requestIds.length === 0) {
+        const read = await this.mcp.call('t3_thread_read', { threadId: this.thread, limit: 1 }, signal);
+        if (read.thread?.pendingRequestCount > 0) return { type: 'failed', error: 'T3 runtime approval is pending; question-response MCP tools cannot approve it' };
+      }
       if (state.status === 'completed' && !this.terminal) {
         this.terminal = true;
         const read = await this.mcp.call('t3_thread_read', { threadId: this.thread, limit: 20, maxCharsPerItem: 3000 }, signal);

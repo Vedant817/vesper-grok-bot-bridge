@@ -5,6 +5,12 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+
+function preferRequiredVersion(transport: Transport): void {
+  const send = transport.send.bind(transport);
+  transport.send = (message, options) => send('method' in message && message.method === 'initialize' ? { ...message, params: { ...message.params, protocolVersion: '2025-06-18' } } : message, options);
+}
 
 export interface ToolCaller { call<T = any>(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T>; close(): Promise<void> }
 export function loopbackUrl(endpoint: string): URL {
@@ -20,7 +26,7 @@ export async function discoverT3(path = join(homedir(), '.t3', 'userdata', 'serv
   return { endpoint: loopbackUrl(endpoint).href };
 }
 export class McpConnection implements ToolCaller {
-  private constructor(readonly client: Client, readonly transportKind: 'http' | 'sse') {}
+  private constructor(readonly client: Client, readonly transportKind: 'http' | 'sse', private readonly transport: StreamableHTTPClientTransport | SSEClientTransport) {}
   static async connect(endpoint: string, token: string, legacyEndpoint = endpoint): Promise<McpConnection> {
     if (!token) throw new Error('MCP bearer token required');
     const url = loopbackUrl(endpoint), legacy = loopbackUrl(legacyEndpoint);
@@ -33,14 +39,16 @@ export class McpConnection implements ToolCaller {
     };
     const client = new Client({ name: 'grok-supervisor', version: '0.1.0' }, { capabilities: {} });
     const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers }, fetch: safeFetch });
-    try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'http'); }
+    preferRequiredVersion(transport);
+    try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'http', transport); }
     catch (error) {
       await transport.close().catch(() => {});
       // Never downgrade on authorization failures, timeouts or malformed protocols.
       if (!(error instanceof StreamableHTTPError) || error.code === undefined || ![404, 405].includes(error.code)) throw error;
       const fallback = new Client({ name: 'grok-supervisor', version: '0.1.0' }, { capabilities: {} });
       const sse = new SSEClientTransport(legacy, { requestInit: { headers }, fetch: safeFetch });
-      try { await fallback.connect(sse, { timeout: 15000 }); return new McpConnection(fallback, 'sse'); }
+      preferRequiredVersion(sse);
+      try { await fallback.connect(sse, { timeout: 15000 }); return new McpConnection(fallback, 'sse', sse); }
       catch (e) { await sse.close().catch(() => {}); throw e; }
     }
   }
@@ -51,6 +59,6 @@ export class McpConnection implements ToolCaller {
     const text = (result.content as any[]).filter((v: any) => v.type === 'text').map((v: any) => v.text).join('\n');
     try { return JSON.parse(text) as T; } catch { throw new Error(`MCP ${name} returned no structured JSON result`); }
   }
-  async close(): Promise<void> { await this.client.close(); }
+  async close(): Promise<void> { if (this.transport instanceof StreamableHTTPClientTransport) await this.transport.terminateSession().catch(() => {}); await this.client.close(); }
 }
 export const t3Thread = z.object({ threadId: z.string(), status: z.string().nullable(), runId: z.string().nullable().optional() }).passthrough();
