@@ -19,9 +19,10 @@ export class AcpWorker extends RpcWorker {
     this.active = true;
     void this.rpc!.request('session/prompt', { sessionId: this.session, prompt: [{ type: 'text', text }] }).then(result => {
       this.active = false;
+      if (!result || typeof result.stopReason !== 'string') throw new Error('Invalid ACP prompt result');
       if (result.stopReason === 'end_turn') this.queue.push({ type: 'completed', summary: 'ACP end_turn' });
       else this.queue.push({ type: 'failed', error: `ACP stop reason: ${result.stopReason}` });
-    }, error => { this.active = false; this.queue.push({ type: 'failed', error: String(error) }); });
+    }).catch(error => { this.active = false; this.queue.push({ type: 'failed', error: String(error) }); });
   }
   protected request(message: RpcMessage): WorkerEvent | undefined | null {
     const p = message.params as any;

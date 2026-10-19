@@ -37,6 +37,12 @@ describe('RPC lifecycle', () => {
   });
 });
 describe('ACP', () => {
+  it('converts malformed prompt results to failure events', async () => {
+    const wire = new TestWire(m => m.method === 'initialize' ? { protocolVersion: 1 } : m.method === 'session/new' ? { sessionId: 's' } : null);
+    const worker = new AcpWorker(async () => wire);
+    try { await worker.start(process.cwd(), 'task'); expect(await worker.next(deadline())).toMatchObject({ type: 'failed', error: expect.stringContaining('Invalid ACP') }); }
+    finally { await worker.close(); }
+  });
   it('drives a real child process through initialize, permission denial and end_turn', async () => {
     const worker = new AcpWorker(async cwd => new StdioWire(process.execPath, [resolve('tests/fixtures/acp-agent.mjs')], cwd));
     try {
@@ -74,6 +80,7 @@ describe('Codex app-server', () => {
       wire.emit({ id: 3, method: 'item/tool/requestUserInput', params: { threadId: 't', questions: [{ id: 'language', question: 'Language?', options: [{ label: 'TypeScript' }] }] } });
       expect((await worker.next(deadline())).type).toBe('question'); await worker.respond('3', { allow: false, answer: 'TypeScript' });
       expect(wire.messages.at(-1)?.result).toEqual({ answers: { language: { answers: ['TypeScript'] } } });
+      wire.emit({ method: 'turn/completed', params: { threadId: 't', turn: { id: 'stale', status: 'completed' } } });
       wire.emit({ method: 'turn/completed', params: { threadId: 't', turn: { id: 'turn', status: 'completed' } } });
       expect((await worker.next(deadline())).type).toBe('completed');
     } finally { await worker.close(); }

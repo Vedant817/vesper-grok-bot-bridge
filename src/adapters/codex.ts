@@ -5,6 +5,8 @@ import type { WorkerEvent } from '../contracts.js';
 export class CodexWorker extends RpcWorker {
   private thread?: string;
   private turn?: string;
+  private starting = false;
+  private early: RpcMessage[] = [];
   constructor(connect: (cwd: string) => Promise<Wire>) { super(connect, false); }
   async start(cwd: string, task: string): Promise<void> {
     const rpc = await this.open(cwd);
@@ -15,8 +17,14 @@ export class CodexWorker extends RpcWorker {
     this.thread = result.thread.id; await this.steer(task);
   }
   async steer(text: string): Promise<void> {
-    const result = await this.rpc!.request('turn/start', { threadId: this.thread, input: [{ type: 'text', text }] });
-    this.turn = result.turn?.id;
+    if (this.starting || this.turn) throw new Error('Codex turn already active');
+    this.starting = true;
+    try {
+      const result = await this.rpc!.request('turn/start', { threadId: this.thread, input: [{ type: 'text', text }] });
+      if (typeof result?.turn?.id !== 'string') throw new Error('Codex missing turn id');
+      this.turn = result.turn.id;
+    } finally { this.starting = false; }
+    for (const message of this.early.splice(0)) this.notification(message);
   }
   protected request(message: RpcMessage): WorkerEvent | undefined | null {
     const p = message.params as any;
@@ -34,6 +42,9 @@ export class CodexWorker extends RpcWorker {
   protected notification(message: RpcMessage): void {
     const p = message.params as any;
     if (p?.threadId !== this.thread) return;
+    if (this.starting) { if (this.early.length >= 100) this.queue.close(new Error('Early Codex event limit')); else this.early.push(message); return; }
+    if (message.method === 'turn/completed' && (!this.turn || p.turn?.id !== this.turn)) return;
+    if (p.turnId && p.turnId !== this.turn) return;
     if (message.method === 'item/agentMessage/delta' && typeof p.delta === 'string') this.queue.push({ type: 'output', text: p.delta });
     if (message.method === 'turn/completed') {
       this.turn = undefined;
