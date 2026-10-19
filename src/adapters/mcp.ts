@@ -26,7 +26,11 @@ export class McpConnection implements ToolCaller {
     const url = loopbackUrl(endpoint), legacy = loopbackUrl(legacyEndpoint);
     if (legacy.origin !== url.origin) throw new Error('Legacy endpoint must share origin');
     const headers = { Authorization: `Bearer ${token}` };
-    const safeFetch: typeof fetch = (input, init) => fetch(input, { ...init, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(15000), ...(init?.signal ? [init.signal] : [])]) });
+    const safeFetch: typeof fetch = async (input, init) => {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(new Error('MCP headers timeout')), 15000);
+      try { return await fetch(input, { ...init, redirect: 'error', signal: AbortSignal.any([controller.signal, ...(init?.signal ? [init.signal] : [])]) }); }
+      finally { clearTimeout(timer); }
+    };
     const client = new Client({ name: 'grok-supervisor', version: '0.1.0' }, { capabilities: {} });
     const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers }, fetch: safeFetch });
     try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'http'); }
