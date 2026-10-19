@@ -5,8 +5,8 @@ import { Redactor } from './safety.js';
 
 export class Memory {
   private recent: string[] = [];
-  constructor(private readonly directory: string, private readonly redactor: Redactor, readonly maxBytes = 24000) {
-    if (!Number.isInteger(maxBytes) || maxBytes < 256 || maxBytes > 24000) throw new Error('Memory budget must be 256..24000 UTF-8 bytes');
+  constructor(private readonly directory: string, private readonly redactor: Redactor, readonly maxBytes = 6000) {
+    if (!Number.isInteger(maxBytes) || maxBytes < 256 || maxBytes > 6000) throw new Error('Memory budget must be 256..6000 UTF-8 bytes');
   }
   async append(value: unknown): Promise<string> {
     const data = this.redactor.redact(JSON.stringify(value));

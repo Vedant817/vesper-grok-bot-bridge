@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Worker, Reasoner } from './contracts.js';
-import { classifyPermission, Redactor } from './safety.js';
+import { classifyPermission, Redactor, RedactedRecords } from './safety.js';
 import { Memory } from './memory.js';
 import { verifyWorktree, changes } from './worktree.js';
 
@@ -22,18 +22,25 @@ export class Supervisor {
     });
     let turns = 0;
     const seen = new Map<string, number>();
+    const stream = new RedactedRecords(this.redactor);
     try {
-      await race(this.worker.start(config.cwd, config.goal));
+      const goal = this.redactor.redact(config.goal);
+      await this.memory.append({ goal, initialRepository: await changes(config.cwd) });
+      await race(this.worker.start(config.cwd, goal));
       for (let events = 0; events < maxEvents; events++) {
         const event = await race(this.worker.next(signal));
+        if (event.type === 'output') {
+          for (const line of stream.push(event.text)) await this.memory.append({ type: 'output', text: line });
+          continue;
+        }
         await this.memory.append(event);
-        if (event.type === 'output') continue;
         if (event.type === 'failed') return { state: 'failed', reason: this.redactor.redact(event.error), turns };
         if (event.type === 'permission') {
           const decision = classifyPermission(event.request, config.cwd);
           await this.memory.append({ permission: event.id, decision });
           await race(this.worker.respond(event.id, { allow: decision.allow }));
         } else if (event.type === 'question') {
+          if (/\b(?:approv\w*|permission|credential\w*|password|payment|refund|force.push|delete|token|api.key)\b/i.test(event.question + ' ' + (event.options ?? []).join(' '))) return { state: 'stopped', reason: 'Approval-shaped question requires a structured permission contract', turns };
           const key = createHash('sha256').update(event.question).digest('hex');
           seen.set(key, (seen.get(key) ?? 0) + 1);
           if (seen.get(key)! > 2) return { state: 'stopped', reason: 'Repeated question loop', turns };
