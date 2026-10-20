@@ -1,18 +1,33 @@
 import { RpcWorker } from './rpc-worker.js';
-import type { RpcMessage } from '../rpc.js';
+import type { RpcMessage, Wire } from '../rpc.js';
 import type { WorkerEvent } from '../contracts.js';
 
 /** ACP v1: session/prompt is the turn; session/turn is not a standard method. */
 export class AcpWorker extends RpcWorker {
   private session?: string;
   private active = false;
+  constructor(connect: (cwd: string) => Promise<Wire>, private readonly options: { model?: string; resumeId?: string } = {}) { super(connect); }
+  get nativeSessionId(): string | undefined { return this.session; }
   async start(cwd: string, task: string): Promise<void> {
     const rpc = await this.open(cwd);
     const init = await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'grok-supervisor', version: '0.1.0' } });
     if (init.protocolVersion !== 1) throw new Error('Unsupported ACP protocol version');
-    const session = await rpc.request('session/new', { cwd, mcpServers: [] });
-    if (typeof session.sessionId !== 'string') throw new Error('ACP missing sessionId');
-    this.session = session.sessionId; this.prompt(task);
+    if (this.options.resumeId && init.agentCapabilities?.loadSession !== true) throw new Error('ACP agent does not support session loading');
+    const session = await rpc.request(this.options.resumeId ? 'session/load' : 'session/new', { ...(this.options.resumeId ? { sessionId: this.options.resumeId } : {}), cwd, mcpServers: [] });
+    if (!this.options.resumeId && typeof session.sessionId !== 'string') throw new Error('ACP missing sessionId');
+    if (this.options.resumeId && session.sessionId && session.sessionId !== this.options.resumeId) throw new Error('ACP resumed a different session');
+    this.session = this.options.resumeId ?? session.sessionId;
+    if (this.options.model) {
+      if (session.models?.availableModels?.some((m: any) => m.modelId === this.options.model)) {
+        await rpc.request('session/set_model', { sessionId: this.session, modelId: this.options.model });
+      } else {
+        const config = session.configOptions?.find((o: any) => o.category === 'model' && o.type === 'select');
+        const values = config?.options?.flatMap((o: any) => o.options ?? [o]);
+        if (!config || !values?.some((o: any) => o.value === this.options.model)) throw new Error('ACP requested model is unavailable');
+        await rpc.request('session/set_config_option', { sessionId: this.session, configId: config.id, value: this.options.model });
+      }
+    }
+    this.prompt(task);
   }
   private prompt(text: string): void {
     if (this.active) throw new Error('ACP turn already active');
