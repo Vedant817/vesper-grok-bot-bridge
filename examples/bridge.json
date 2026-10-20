@@ -1,0 +1,15 @@
+{
+  "stateDirectory": "/absolute/path/outside-repositories/agent-bridge-state",
+  "roots": [
+    {
+      "directory": "/absolute/path/to/your-repository",
+      "verify": {
+        "executable": "node",
+        "args": ["scripts/verify.mjs"]
+      }
+    }
+  ],
+  "maxTurns": 8,
+  "maxEvents": 200,
+  "maxSessions": 100
+}

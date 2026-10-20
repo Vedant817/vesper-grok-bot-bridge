@@ -1,4 +1,14 @@
-# Grok Autonomous Agent Supervisor
+# Coding Agent Bridge for Grok Bot
+
+Grok Bot can supervise installed coding agents through this portable MCP bridge: choose a directory, provider and model; start or enter a session; answer questions and permissions; review work; send corrections; and finish only with passing verification. Grok Bot supplies the reasoning through its own subscription. The bridge does **not** require an `XAI_API_KEY`.
+
+Start with the [portable bridge setup and Grok Bot instructions](docs/BRIDGE.md) and [owner configuration example](examples/bridge.json). Native adapters support Codex app-server, OpenCode/ACP and Claude Code stream JSON, with optional T3 Code MCP discovery. Other CLIs can register a supported protocol adapter. Antigravity has no built-in session API adapter; installing an app alone does not establish control of it.
+
+The worker directory is a runtime argument, constrained by owner-enrolled repositories. Product code contains no required checkout path or dependency on a generated report. Grok Bot's local-command permission or a compatible MCP connection is still required to reach the machine; a cloud Bot cannot reach desktop localhost by installation alone.
+
+The older autonomous API-key supervisor remains available below for compatibility.
+
+## Legacy autonomous supervisor
 
 A TypeScript supervisor for isolated coding tasks over T3 MCP, ACP v1, Codex app-server and a conservative terminal fallback. Grok answers technical questions and evaluates evidence; deterministic policy controls intercepted permission requests.
 
