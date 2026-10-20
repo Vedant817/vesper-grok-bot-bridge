@@ -4,6 +4,10 @@ import { CodexWorker } from '../src/adapters/codex.js';
 import { ClaudeWorker } from '../src/adapters/claude.js';
 import { resolveExecutable } from '../src/bridge/provider.js';
 import type { RpcMessage, Wire } from '../src/rpc.js';
+import { mkdtemp, mkdir, symlink, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { scopedPath } from '../src/adapters/scoped-path.js';
 
 class WireFixture implements Wire {
   messages: any[] = [];
@@ -16,6 +20,15 @@ class WireFixture implements Wire {
 }
 const signal = () => AbortSignal.timeout(1000);
 describe('portable native sessions', () => {
+  it('rejects dangling directory symlinks instead of climbing past them', async () => {
+    const fixture = await mkdtemp(join(tmpdir(), 'bridge-scope-regression-'));
+    try {
+      const cwd = join(fixture, 'worktree'); await mkdir(cwd);
+      await symlink(join(fixture, 'outside-missing'), join(cwd, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+      expect(scopedPath(cwd, join(cwd, 'escape', 'new.txt'))).toBe(false);
+      expect(scopedPath(cwd, join(cwd, 'ordinary-missing', 'new.txt'))).toBe(true);
+    } finally { await rm(fixture, { recursive: true, force: true }); }
+  });
   it('pins the Codex requested model and rejects an ignored model', async () => {
     const wire = new WireFixture(m => m.method === 'initialize' ? {} : m.method === 'thread/start' ? { thread: { id: 't' }, model: 'wrong' } : undefined);
     const worker = new CodexWorker(async () => wire, { model: 'exact' });
