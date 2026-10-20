@@ -5,7 +5,8 @@ let prompt;
 input.on('line', line => {
   const m = JSON.parse(line);
   if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
-  else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 'session-1' } });
+  else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 'session-1', models: { currentModelId: 'fixture', availableModels: [{ modelId: 'fixture', name: 'Fixture' }] } } });
+  else if (m.method === 'session/set_model') send({ id: m.id, result: {} });
   else if (m.method === 'session/prompt') {
     prompt = m.id;
     send({ id: 'permission-1', method: 'session/request_permission', params: { sessionId: 'session-1', toolCall: { title: 'Delete files' }, options: [{ optionId: 'no', kind: 'reject_once' }, { optionId: 'yes', kind: 'allow_once' }] } });

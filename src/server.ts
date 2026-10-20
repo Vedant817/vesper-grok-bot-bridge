@@ -9,8 +9,11 @@ import { z } from 'zod';
 import type { Reasoner } from './contracts.js';
 import type { RunResult } from './supervisor.js';
 import { classifyPermission, Redactor } from './safety.js';
+import type { BridgeService } from './bridge/service.js';
+import { registerBridgeTools } from './bridge/tools.js';
 
 export interface Services {
+  bridge?: BridgeService;
   repository: string;
   reasoner?: Reasoner;
   redactor: Redactor;
@@ -18,6 +21,7 @@ export interface Services {
 }
 export function createMcpServer(services: Services): McpServer {
   const server = new McpServer({ name: 'grok-autonomous-supervisor', version: '0.1.0' });
+  if (services.bridge) { registerBridgeTools(server, services.bridge, services.redactor); return server; }
   const result = (value: unknown) => ({ content: [{ type: 'text' as const, text: services.redactor.json(value) }] });
   const lifetime = new AbortController();
   server.server.onclose = () => lifetime.abort(new Error('MCP session closed'));

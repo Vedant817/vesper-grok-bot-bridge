@@ -13,11 +13,20 @@ export class T3Worker implements Worker {
   private events: WorkerEvent[] = [];
   private terminal = false;
   private stopped = false;
-  constructor(private readonly mcp: ToolCaller, private readonly projectId: string, private readonly title = 'Supervised task') {}
+  constructor(private readonly mcp: ToolCaller, private readonly projectId: string, private readonly title = 'Supervised task', private readonly selection?: { instanceId: string; model: string; resumeId?: string }) {}
+  get nativeSessionId(): string | undefined { return this.thread; }
   async start(cwd: string, task: string): Promise<void> {
     const branch = await git(cwd, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '');
-    const result = t3Thread.parse(await this.mcp.call('t3_thread_launch', { projectId: this.projectId, title: this.title, message: task, runtimeMode: 'approval-required', workspaceStrategy: { type: 'existing_worktree', worktreePath: cwd, ...(branch ? { branch } : {}) } }));
+    if (this.selection?.resumeId) {
+      const read = await this.mcp.call('t3_thread_read', { threadId: this.selection.resumeId, limit: 1 });
+      if (!read.thread?.worktreePath || await realpath(read.thread.worktreePath) !== await realpath(cwd)) throw new Error('T3 resume workspace mismatch');
+      if (read.thread.providerInstanceId !== this.selection.instanceId || read.thread.model !== this.selection.model || read.thread.projectId !== this.projectId) throw new Error('T3 resume provider, model or project mismatch');
+      this.thread = this.selection.resumeId;
+      await this.send(task); return;
+    }
+    const result = t3Thread.parse(await this.mcp.call('t3_thread_launch', { projectId: this.projectId, title: this.title, message: task, ...(this.selection ? { modelSelection: { instanceId: this.selection.instanceId, model: this.selection.model } } : {}), runtimeMode: 'approval-required', workspaceStrategy: { type: 'existing_worktree', worktreePath: cwd, ...(branch ? { branch } : {}) } }));
     this.thread = result.threadId; this.run = result.runId;
+    if (this.selection && (result.modelSelection?.instanceId !== this.selection.instanceId || result.modelSelection?.model !== this.selection.model)) { await this.cancel(); throw new Error('T3 did not confirm requested provider and model'); }
     for (let attempt = 0; attempt < 40 && !this.stopped; attempt++) {
       const state = await this.mcp.call('t3_thread_read', { threadId: this.thread, limit: 1 });
       if (state.thread?.worktreePath) {
@@ -40,14 +49,19 @@ export class T3Worker implements Worker {
         if (!Array.isArray(request.questions) || request.questions.length !== 1 || request.questions[0].multiSelect) throw new Error('Unsupported T3 multi-question or multiselect request; no answer sent');
         const q = request.questions[0], id = `${requestId}:${q.id}`;
         this.requests.set(id, { requestId, questionId: q.id, options: q.options ?? [], allowCustom: q.allowCustomAnswer === true });
-        this.events.push({ type: 'question', id, question: q.question, options: q.options?.map((o: any) => o.label) });
+        this.events.push({ type: 'question', id, question: q.question, options: q.options?.map((o: any) => o.label), allowCustomAnswer: q.allowCustomAnswer === true });
       }
       if (this.events.length) continue;
       const state = await this.mcp.call('t3_thread_wait', { threadId: this.thread, ...(this.run ? { runId: this.run } : {}), timeoutMs: 1000 }, signal);
       if (state.runId) this.run = state.runId;
       if (state.status === 'waiting' && pending.requestIds.length === 0) {
         const read = await this.mcp.call('t3_thread_read', { threadId: this.thread, limit: 1 }, signal);
-        if (read.thread?.pendingRequestCount > 0) return { type: 'failed', error: 'T3 runtime approval is pending; question-response MCP tools cannot approve it' };
+        if (read.thread?.pendingRequestCount > 0) {
+          const current = await this.mcp.call('t3_pending_request_list', { threadId: this.thread }, signal);
+          if (!Array.isArray(current.requestIds)) throw new Error('Invalid T3 pending request contract');
+          if (current.requestIds.length) continue;
+          return { type: 'failed', error: 'T3 runtime approval is pending; question-response MCP tools cannot approve it' };
+        }
       }
       if (state.status === 'completed' && !this.terminal) {
         this.terminal = true;

@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { Redactor } from '../safety.js';
 
 function preferRequiredVersion(transport: Transport): void {
   const send = transport.send.bind(transport);
@@ -26,7 +27,8 @@ export async function discoverT3(path = join(homedir(), '.t3', 'userdata', 'serv
   return { endpoint: loopbackUrl(endpoint).href };
 }
 export class McpConnection implements ToolCaller {
-  private constructor(readonly client: Client, readonly transportKind: 'http' | 'sse', private readonly transport: StreamableHTTPClientTransport | SSEClientTransport) {}
+  private readonly redactor: Redactor;
+  private constructor(readonly client: Client, readonly transportKind: 'http' | 'sse', private readonly transport: StreamableHTTPClientTransport | SSEClientTransport, token: string) { this.redactor = new Redactor([token]); }
   static async connect(endpoint: string, token: string, legacyEndpoint = endpoint): Promise<McpConnection> {
     if (!token) throw new Error('MCP bearer token required');
     const url = loopbackUrl(endpoint), legacy = loopbackUrl(legacyEndpoint);
@@ -40,7 +42,7 @@ export class McpConnection implements ToolCaller {
     const client = new Client({ name: 'grok-supervisor', version: '0.1.0' }, { capabilities: {} });
     const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers }, fetch: safeFetch });
     preferRequiredVersion(transport);
-    try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'http', transport); }
+    try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'http', transport, token); }
     catch (error) {
       await transport.close().catch(() => {});
       // Never downgrade on authorization failures, timeouts or malformed protocols.
@@ -48,17 +50,22 @@ export class McpConnection implements ToolCaller {
       const fallback = new Client({ name: 'grok-supervisor', version: '0.1.0' }, { capabilities: {} });
       const sse = new SSEClientTransport(legacy, { requestInit: { headers }, fetch: safeFetch });
       preferRequiredVersion(sse);
-      try { await fallback.connect(sse, { timeout: 15000 }); return new McpConnection(fallback, 'sse', sse); }
+      try { await fallback.connect(sse, { timeout: 15000 }); return new McpConnection(fallback, 'sse', sse, token); }
       catch (e) { await sse.close().catch(() => {}); throw e; }
     }
   }
   async call<T = any>(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    const result = await this.client.callTool({ name, arguments: args }, undefined, { signal, timeout: 30000 });
-    if (result.isError) throw new Error(`MCP tool failed: ${name}`);
+    // Native startup may negotiate several RPCs; owner verification itself has a 120s budget.
+    const timeout = name === 'agent_verify' ? 300000 : ['agent_start', 'agent_attach', 'agent_resume', 'agent_followup'].includes(name) ? 600000 : 30000;
+    const result = await this.client.callTool({ name, arguments: args }, undefined, { signal, timeout });
+    if (result.isError) {
+      const detail = name.startsWith('agent_') ? (result.content as any[]).filter(v => v.type === 'text' && typeof v.text === 'string').map(v => v.text).join('\n').slice(0, 2000) : '';
+      throw new Error(`MCP tool failed: ${name}${detail ? ': ' + this.redactor.redact(detail) : ''}`);
+    }
     if (result.structuredContent) return result.structuredContent as T;
     const text = (result.content as any[]).filter((v: any) => v.type === 'text').map((v: any) => v.text).join('\n');
     try { return JSON.parse(text) as T; } catch { throw new Error(`MCP ${name} returned no structured JSON result`); }
   }
   async close(): Promise<void> { if (this.transport instanceof StreamableHTTPClientTransport) await this.transport.terminateSession().catch(() => {}); await this.client.close(); }
 }
-export const t3Thread = z.object({ threadId: z.string(), status: z.string().nullable(), runId: z.string().nullable().optional() }).passthrough();
+export const t3Thread = z.object({ threadId: z.string(), status: z.string().nullable(), runId: z.string().nullable().optional(), modelSelection: z.object({ instanceId: z.string().optional(), model: z.string() }).passthrough().optional() }).passthrough();

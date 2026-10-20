@@ -8,6 +8,11 @@ import { serveHttp, serveStdio } from './server.js';
 import { Redactor } from './safety.js';
 import { z } from 'zod';
 import { runTaskGraph } from './task-graph.js';
+import { bridgeApplication } from './bridge/application.js';
+import { McpConnection } from './adapters/mcp.js';
+export { BridgeService } from './bridge/service.js';
+export { bridgeApplication } from './bridge/application.js';
+export { discoverProviders } from './bridge/provider.js';
 export { Supervisor } from './supervisor.js';
 export { Memory } from './memory.js';
 export { GrokReasoner } from './grok.js';
@@ -29,8 +34,34 @@ async function readJson(file: string): Promise<unknown> {
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [mode, file, ...rest] = args;
+  if (mode === 'bridge-call') {
+    if (!file || !rest[0] || !rest[0].startsWith('agent_')) throw new Error('Usage: grok-supervisor bridge-call <loopback MCP URL> <agent_tool> <arguments.json>');
+    const args = rest[1] ? await readJson(rest[1]) : {};
+    if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Tool arguments must be a JSON object');
+    const client = await McpConnection.connect(file, process.env.MCP_SERVER_TOKEN ?? '');
+    try { console.log(JSON.stringify(await client.call(rest[0], args as Record<string, unknown>), null, 2)); }
+    finally { await client.close(); } return;
+  }
+  if (mode === 'bridge-stdio' || mode === 'bridge-http' || mode === 'bridge-discover') {
+    if (!file) throw new Error('Bridge owner configuration JSON required');
+    const services = await bridgeApplication(await readJson(file));
+    if (mode === 'bridge-discover') { console.log(JSON.stringify(services.bridge.discover(), null, 2)); await services.bridge.close(); return; }
+    let shutdown: () => Promise<unknown>;
+    try { if (mode === 'bridge-stdio') {
+      const server = await serveStdio(services); shutdown = () => server.close();
+      const previous = server.server.onclose;
+      server.server.onclose = () => { previous?.(); void services.bridge.close(); };
+    } else {
+      const port = rest[0] ? Number(rest[0]) : 3001;
+      if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid HTTP port');
+      const server = await serveHttp(services, process.env.MCP_SERVER_TOKEN ?? '', port); shutdown = server.close;
+      console.error(`Coding agent bridge listening on ${server.url}/mcp (legacy: /sse)`);
+    } } catch (error) { await services.bridge.close(); throw error; }
+    const stop = () => { void services.bridge.close().finally(shutdown); };
+    process.once('SIGINT', stop); process.once('SIGTERM', stop); return;
+  }
   if (!mode || mode === '--help') {
-    console.log('Usage: grok-supervisor run <config.json> <goal>\n       grok-supervisor run-plan <config.json> <tasks.json>\n       grok-supervisor serve-stdio <config.json>\n       grok-supervisor serve-http <config.json> [port]\n\nCredentials: XAI_API_KEY, T3_BEARER_TOKEN, MCP_SERVER_TOKEN. Config commands are trusted owner input.'); return;
+    console.log('Usage: grok-supervisor bridge-stdio <owner.json>\n       grok-supervisor bridge-http <owner.json> [port]\n       grok-supervisor bridge-discover <owner.json>\n       grok-supervisor bridge-call <loopback MCP URL> <agent_tool> [arguments.json]\n\nLegacy autonomous mode: run <config.json> <goal> | run-plan <config.json> <tasks.json>\nLegacy MCP: serve-stdio <config.json> | serve-http <config.json> [port]\n\nBridge: no XAI_API_KEY required. Native agents use their own authentication. HTTP needs MCP_SERVER_TOKEN; T3 needs T3_BEARER_TOKEN. Owner config selects trusted roots and verifier commands.'); return;
   }
   if (!['run', 'run-plan', 'serve-stdio', 'serve-http'].includes(mode) || !file) throw new Error('Invalid command; use --help');
   const config = configSchema.parse(await readJson(file));
