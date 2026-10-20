@@ -1,9 +1,8 @@
 import { RpcWorker } from './rpc-worker.js';
 import type { RpcMessage, Wire } from '../rpc.js';
 import type { WorkerEvent } from '../contracts.js';
-import { dirname, resolve } from 'node:path';
-import { realpathSync } from 'node:fs';
-import { within } from '../safety.js';
+import { resolve } from 'node:path';
+import { scopedPath } from './scoped-path.js';
 
 export class CodexWorker extends RpcWorker {
   private thread?: string;
@@ -45,7 +44,7 @@ export class CodexWorker extends RpcWorker {
     if (message.method === 'mcpServer/elicitation/request') { this.rpc!.respond(message.id!, { action: 'decline', content: null }); return null; }
     if (message.method === 'item/fileChange/requestApproval') {
       const changes = this.fileChanges.get(p.itemId);
-      const bound = changes?.length && changes.every(change => typeof change.path === 'string' && this.scopedPath(change.path) && (change.kind?.type !== 'update' || !change.kind.move_path || this.scopedPath(change.kind.move_path)));
+      const bound = changes?.length && changes.every(change => scopedPath(this.cwd, change.path) && (change.kind?.type !== 'update' || !change.kind.move_path || scopedPath(this.cwd, change.kind.move_path)));
       return { type: 'permission', id: String(message.id), request: { ...(bound ? { cwd: this.cwd } : {}), description: JSON.stringify({ ...p, changes: changes ?? [], scopeEvidence: bound ? 'Validated file change paths' : 'Missing or outside-worktree file change evidence' }) } };
     }
     if (message.method === 'item/commandExecution/requestApproval') return { type: 'permission', id: String(message.id), request: { command: p.command, cwd: p.cwd, description: JSON.stringify(p) } };
@@ -71,14 +70,6 @@ export class CodexWorker extends RpcWorker {
       this.turn = undefined;
       this.fileChanges.clear();
       this.queue.push(p.turn?.status === 'completed' ? { type: 'completed', summary: 'Codex turn completed' } : { type: 'failed', error: `Codex turn ${p.turn?.status}` });
-    }
-  }
-  private scopedPath(path: string): boolean {
-    const candidate = resolve(this.cwd, path); if (!within(this.cwd, candidate)) return false;
-    let parent = candidate;
-    for (;;) {
-      try { return within(realpathSync(this.cwd), realpathSync(parent)); }
-      catch { const next = dirname(parent); if (next === parent) return false; parent = next; }
     }
   }
   async respond(id: string, response: { allow: boolean; answer?: string }): Promise<void> {

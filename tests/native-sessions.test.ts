@@ -63,12 +63,26 @@ describe('portable native sessions', () => {
     const fresh = new AcpWorker(async () => wire, { model: 'missing' });
     await expect(fresh.start(process.cwd(), 'task')).rejects.toThrow('model is unavailable'); await fresh.close();
   });
+  it('does not attach trusted cwd to ACP file mutations without scoped locations', async () => {
+    const wire = new WireFixture(m => m.method === 'initialize' ? { protocolVersion: 1 } : m.method === 'session/new' ? { sessionId: 's' } : undefined);
+    const worker = new AcpWorker(async () => wire);
+    try {
+      await worker.start(process.cwd(), 'task');
+      for (const [id, toolCall] of [[1, { kind: 'edit' }], [2, { kind: 'edit', locations: [{ path: '../outside.txt' }] }]] as const) {
+        wire.emit({ id, method: 'session/request_permission', params: { sessionId: 's', toolCall } });
+        const event = await worker.next(signal()); expect(event.type === 'permission' && event.request.cwd).toBeUndefined();
+      }
+    } finally { await worker.close(); }
+  });
   it('responds to native Claude permissions/questions and supports sequential prompts', async () => {
     const wire = new WireFixture(m => m.request?.subtype === 'initialize' ? { type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: {} } } : undefined);
     const worker = new ClaudeWorker(async () => wire);
     try {
       await worker.start(process.cwd(), 'task');
       wire.emit({ type: 'system', subtype: 'init', session_id: 'native', cwd: process.cwd() });
+      wire.emit({ type: 'control_request', request_id: 'outside', request: { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '../outside.txt', content: 'unsafe' } } });
+      const outside = await worker.next(signal()); expect(outside.type === 'permission' && outside.request.cwd).toBeUndefined();
+      await worker.respond('outside', { allow: false });
       wire.emit({ type: 'control_request', request_id: 'permission', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'rm -rf /' } } });
       expect(await worker.next(signal())).toMatchObject({ type: 'permission', request: { command: 'rm -rf /' } });
       await worker.respond('permission', { allow: false });

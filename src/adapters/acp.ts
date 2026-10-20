@@ -1,6 +1,7 @@
 import { RpcWorker } from './rpc-worker.js';
 import type { RpcMessage, Wire } from '../rpc.js';
 import type { WorkerEvent } from '../contracts.js';
+import { scopedPath } from './scoped-path.js';
 
 /** ACP v1: session/prompt is the turn; session/turn is not a standard method. */
 export class AcpWorker extends RpcWorker {
@@ -43,7 +44,12 @@ export class AcpWorker extends RpcWorker {
     const p = message.params as any;
     if (message.method === 'elicitation/create') { this.rpc!.respond(message.id!, { action: 'decline' }); return null; }
     if (message.method === '_supervisor/ask_question' && p?.sessionId === this.session && typeof p.question === 'string') return { type: 'question', id: String(message.id), question: p.question, options: p.options };
-    if (message.method === 'session/request_permission' && p?.sessionId === this.session) return { type: 'permission', id: String(message.id), request: { cwd: this.cwd, description: JSON.stringify(p.toolCall) } };
+    if (message.method === 'session/request_permission' && p?.sessionId === this.session) {
+      const call = p.toolCall, locations = call?.locations;
+      const fileMutation = ['edit', 'delete', 'move'].includes(call?.kind);
+      const scoped = (!fileMutation || Array.isArray(locations) && locations.length > 0) && (!Array.isArray(locations) || locations.every((l: any) => scopedPath(this.cwd, l.path)));
+      return { type: 'permission', id: String(message.id), request: { ...(scoped ? { cwd: this.cwd } : {}), command: typeof call?.rawInput?.command === 'string' ? call.rawInput.command : undefined, description: JSON.stringify(call) } };
+    }
     // Extensions must be handled explicitly by their producer, never as ACP standard.
     return undefined;
   }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { AsyncQueue, type Wire, type RpcMessage } from '../rpc.js';
 import type { Worker, WorkerEvent } from '../contracts.js';
+import { scopedPath } from './scoped-path.js';
 
 /** Native Claude Code bidirectional stream-json control protocol (Agent SDK). */
 export class ClaudeWorker implements Worker {
@@ -55,7 +56,9 @@ export class ClaudeWorker implements Worker {
         this.queue.push({ type: 'question', id: m.request_id, question: q[0].question, options: q[0].options?.map((o: any) => o.label) });
       } else {
         this.pending.set(m.request_id, r);
-        this.queue.push({ type: 'permission', id: m.request_id, request: { cwd: this.cwd, command: r.tool_name === 'Bash' ? r.input?.command : undefined, description: JSON.stringify({ tool: r.tool_name, input: r.input }) } });
+        const fileTool = ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(r.tool_name);
+        const scoped = fileTool ? scopedPath(this.cwd, r.input?.file_path ?? r.input?.notebook_path) : r.tool_name === 'Bash' && typeof r.input?.command === 'string';
+        this.queue.push({ type: 'permission', id: m.request_id, request: { ...(scoped ? { cwd: this.cwd } : {}), command: r.tool_name === 'Bash' ? r.input?.command : undefined, description: JSON.stringify({ tool: r.tool_name, input: r.input, scopeEvidence: scoped ? 'Bound to worktree' : 'Missing or outside-worktree file path' }) } });
       }
     }
     if (m.type === 'assistant' && !m.parent_tool_use_id) for (const c of m.message?.content ?? []) if (c.type === 'text' && typeof c.text === 'string') this.queue.push({ type: 'output', text: c.text });
