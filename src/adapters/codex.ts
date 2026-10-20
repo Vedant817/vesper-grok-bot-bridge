@@ -40,6 +40,7 @@ export class CodexWorker extends RpcWorker {
   protected request(message: RpcMessage): WorkerEvent | undefined | null {
     const p = message.params as any;
     if (p?.threadId !== this.thread) return undefined;
+    if (p.turnId && !this.starting && p.turnId !== this.turn) return undefined;
     if (message.method === 'item/permissions/requestApproval') { this.rpc!.respond(message.id!, { permissions: {}, scope: 'turn' }); return null; }
     if (message.method === 'mcpServer/elicitation/request') { this.rpc!.respond(message.id!, { action: 'decline', content: null }); return null; }
     if (message.method === 'item/fileChange/requestApproval') {
