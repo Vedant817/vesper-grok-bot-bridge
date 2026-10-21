@@ -31,7 +31,7 @@ export async function registerManagedClients(paths: ManagedPaths): Promise<Recor
         const message = `${error.stdout ?? ''} ${error.stderr ?? ''}`;
         if (!/not found|no mcp server|does not exist|could not find/i.test(message)) throw new Error('Could not inspect existing MCP configuration');
       }
-      if (existing) { result[id] = 'existing-entry-preserved'; continue; }
+      if (existing) { result[id] = existing.includes(paths.launcher) ? 'existing-entry-preserved' : 'existing-entry-differs'; continue; }
       const args = id === 'codex' ? ['mcp', 'add', name, '--', process.execPath, paths.launcher, 'connect'] : ['mcp', 'add', '--transport', 'stdio', '--scope', 'user', name, '--', process.execPath, paths.launcher, 'connect'];
       await run(launch.executable, [...launch.args, ...args], { windowsHide: true, timeout: 20000 });
       result[id] = 'registered';

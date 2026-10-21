@@ -15,6 +15,15 @@ import { powershellPath } from './powershell.js';
 
 const run = promisify(execFile);
 export interface VerifyCommand { executable: string; args: string[] }
+/**
+ * cmd.exe decodes batch files in the OEM code page, so a literal non-ASCII home would be
+ * corrupted. Keep the shim ASCII and resolve the launcher at runtime from %~dp0 (which
+ * comes from the Unicode command line). Node is taken from PATH because it cannot be
+ * embedded without re-introducing the encoding problem.
+ */
+export function cliShim(): string {
+  return '@echo off\r\nnode "%~dp0..\\launcher.cjs" %*\r\n';
+}
 export interface SetupOptions { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; verify?: VerifyCommand }
 async function readJson(file: string): Promise<any | undefined> {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch (error: any) { if (error.code === 'ENOENT') return; throw error; }
@@ -22,6 +31,11 @@ async function readJson(file: string): Promise<any | undefined> {
 async function atomicJson(file: string, value: unknown): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  await rename(temporary, file);
+}
+async function atomicText(file: string, value: string): Promise<void> {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  await writeFile(temporary, value, { mode: 0o600 });
   await rename(temporary, file);
 }
 export async function npmLaunch(): Promise<VerifyCommand> {
@@ -57,9 +71,19 @@ export async function enrollManagedRepository(repository: string, home?: string,
   if (existing) existing.verify = command;
   else config.roots.push({ directory, verify: command });
   const wasRunning = restart && (await healthManaged(paths)).running;
+  const previousConfig = await readFile(paths.config, 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
   if (wasRunning) await stopManaged(paths);
   await atomicJson(paths.config, config);
-  if (wasRunning) await startManaged(paths);
+  if (wasRunning) {
+    try { await startManaged(paths); }
+    catch (error) {
+      // Never leave the daemon down on a rejected configuration; restore what previously started.
+      if (previousConfig === undefined) await unlink(paths.config).catch(() => {});
+      else await atomicText(paths.config, previousConfig);
+      await startManaged(paths).catch(() => {});
+      throw error;
+    }
+  }
   return { directory, enrolled: true };
 }
 export function launcherSource(home: string): string {
@@ -153,11 +177,12 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
   try { enrollment = await enrollManagedRepository(options.repository ?? process.cwd(), paths.home, options.verify, false); } catch (error: any) { enrollment = { enrolled: false, reason: error.message }; }
   const previous = await readJson(paths.installation);
   if ((await healthManaged(paths)).running) await stopManaged(paths);
-  await atomicJson(paths.installation, { entrypoint, node: process.execPath, version: pkg.version, dependencyLockSha256: lockHash, installedAt: new Date().toISOString(), previous: previous ? { entrypoint: previous.entrypoint, node: previous.node, version: previous.version } : undefined });
+  const pty = await run(process.execPath, ['--input-type=module', '-e', 'const p=await import("node-pty");const t=p.spawn(process.execPath,["-e",""]);t.kill();'], { cwd: stage, windowsHide: true, timeout: 20000 }).then(() => 'available', () => 'unavailable');
+  await atomicJson(paths.installation, { entrypoint, node: process.execPath, version: pkg.version, dependencyLockSha256: lockHash, pty, installedAt: new Date().toISOString(), previous: previous ? { entrypoint: previous.entrypoint, node: previous.node, version: previous.version } : undefined });
   try {
   await writeFile(paths.launcher, launcherSource(paths.home), { mode: 0o600 });
   await mkdir(paths.bin, { recursive: true, mode: 0o700 });
-  if (process.platform === 'win32') await writeFile(join(paths.bin, 'grok-agent-bridge.cmd'), `@echo off\r\n"${process.execPath}" "${paths.launcher}" %*\r\n`, { mode: 0o600 });
+  if (process.platform === 'win32') await writeFile(join(paths.bin, 'grok-agent-bridge.cmd'), cliShim(), { mode: 0o600 });
   else await writeFile(join(paths.bin, 'grok-agent-bridge'), `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${paths.launcher.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o700 });
   await addUserPath(paths.bin);
   await writeFile(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md'), 'Use the approved local terminal to run `grok-agent-bridge call agent_discover`. Use `grok-agent-bridge call TOOL_NAME JSON_ARGUMENTS` for bridge operations. Discover provider/model availability, spawn or import the requested session, handle pending inputs, inspect changes, run verification, and finish only after verification passes. Never read or display bridge credentials. The bridge must run on this computer; cloud-only execution cannot reach it.\n', { mode: 0o600 });

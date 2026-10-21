@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse } from 'jsonc-parser';
 import { managedPaths } from '../src/managed/paths.js';
-import { acquireSetupLock, inferVerifier, launcherSource } from '../src/managed/install.js';
-import { daemonVbs, startupScript, startupTaskName } from '../src/managed/startup.js';
+import { acquireSetupLock, cliShim, inferVerifier, launcherSource } from '../src/managed/install.js';
+import { daemonVbs, encodeVbs, startupScript, startupTaskName } from '../src/managed/startup.js';
 import { mergeOpenCodeConfig } from '../src/managed/clients.js';
 import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
 
@@ -67,6 +67,19 @@ describe('managed installation contracts', () => {
     expect(vbs).toContain(', 0, True');
     expect(vbs).toContain('daemon');
     expect(vbs).not.toContain('credential');
+  });
+  it('keeps the Windows CLI shim ASCII-only and locates the launcher at runtime', () => {
+    const shim = cliShim();
+    expect(shim.startsWith('@echo off')).toBe(true);
+    expect(shim).toContain('%~dp0');
+    expect(shim).toContain('launcher.cjs');
+    expect(/^[\x00-\x7F]+$/.test(shim)).toBe(true);
+  });
+  it('encodes logon scripts as UTF-16LE so Unicode homes survive WSH decoding', () => {
+    const paths = managedPaths(join(tmpdir(), 'José 工具'));
+    const encoded = encodeVbs(daemonVbs(paths, 'C:\\Node\\node.exe'));
+    expect([encoded[0], encoded[1]]).toEqual([0xff, 0xfe]);
+    expect(encoded.subarray(2).toString('utf16le')).toContain(paths.home);
   });
   it('keeps non-ASCII home paths intact through the credential helper', async () => {
     const directory = await temporary(), paths = managedPaths(join(directory, 'José 工具'));
