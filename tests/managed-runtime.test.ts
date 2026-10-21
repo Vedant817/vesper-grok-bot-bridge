@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile, spawn } from 'node:child_process';
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { managedPaths } from '../src/managed/paths.js';
 import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
+import { controlPipe, ensureControlKey } from '../src/managed/control.js';
 import { healthManaged, runManagedDaemon, stopManaged } from '../src/managed/runtime.js';
 import { createManagedProxy } from '../src/managed/proxy.js';
 import { Redactor } from '../src/safety.js';
@@ -112,6 +114,56 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
       await mkdir(guard); await writeFile(join(guard, 'owner.json'), JSON.stringify({ pid: process.pid, id: randomUUID() }));
       await expect(runManagedDaemon(blocked, { repository: isolated, redactor: new Redactor() })).rejects.toThrow('already in progress');
       await expect(access(blocked.receipt)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await rm(isolated, { recursive: true, force: true }); }
+  });
+
+  it('never transmits the bearer token over the control pipe', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-control-leak-'));
+    try {
+      const paths = managedPaths(isolated), token = await ensureCredential(paths);
+      await ensureControlKey(paths);
+      const instanceId = randomUUID();
+      await writeFile(paths.receipt, JSON.stringify({ url: 'http://127.0.0.1:9/', pid: process.pid, instanceId, startedAt: new Date().toISOString() }));
+      const received: string[] = [];
+      const squatter = createServer(socket => {
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk: string) => { received.push(chunk); socket.end('{"receipt":"{}","nonce":"0","mac":"0"}\n'); });
+        socket.on('error', () => {});
+      });
+      await new Promise<void>(resolve => squatter.listen(controlPipe(paths, instanceId), resolve));
+      try {
+        expect((await healthManaged(paths)).running).toBe(false);
+        const request = received.join('');
+        expect(request).toMatch(/"mac":"[a-f0-9]{64}"/);
+        expect(request).not.toContain(token);
+      } finally { await new Promise<void>(resolve => squatter.close(() => resolve())); }
+    } finally { await rm(isolated, { recursive: true, force: true }); }
+  });
+
+  it('reclaims a stale receipt whose daemon is gone instead of blocking setup', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-stale-receipt-'));
+    try {
+      const paths = managedPaths(isolated); await ensureCredential(paths);
+      const exited = spawn(process.execPath, ['-e', ''], { windowsHide: true });
+      const deadPid = exited.pid;
+      await new Promise<void>(resolve => exited.on('exit', () => resolve()));
+      if (!deadPid) throw new Error('Spawned helper did not report a pid');
+      await writeFile(paths.receipt, JSON.stringify({ url: 'http://127.0.0.1:9/', pid: deadPid, instanceId: randomUUID(), startedAt: new Date().toISOString() }));
+      await expect(stopManaged(paths)).resolves.toEqual({ stopped: true });
+      await expect(access(paths.receipt)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await rm(isolated, { recursive: true, force: true }); }
+  });
+
+  it('quarantines an invalid credential instead of wedging later setup', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-corrupt-credential-'));
+    try {
+      const paths = managedPaths(isolated);
+      await ensureCredential(paths);
+      await writeFile(paths.token, 'not-a-credential', { mode: 0o600 });
+      const replacement = await ensureCredential(paths);
+      expect(replacement).toMatch(/^[a-f0-9]{64}$/);
+      expect(replacement).not.toBe('not-a-credential');
+      expect((await readdir(isolated)).some(file => file.startsWith('credential.bin.invalid-'))).toBe(true);
     } finally { await rm(isolated, { recursive: true, force: true }); }
   });
 });

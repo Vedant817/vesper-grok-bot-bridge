@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, createConnection } from 'node:net';
 import { lstat, mkdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,7 +8,9 @@ import { bridgeApplication } from '../bridge/application.js';
 import { McpConnection } from '../adapters/mcp.js';
 import { serveHttp } from '../server.js';
 import type { Services } from '../server.js';
-import { readCredential } from './credentials.js';
+import { hardenHome, readCredential } from './credentials.js';
+import { controlMac, controlPipe, ensureControlKey, sameMac } from './control.js';
+import { processAlive } from './process.js';
 import { Redactor } from '../safety.js';
 import type { ManagedPaths } from './paths.js';
 export { connectManaged } from './proxy.js';
@@ -16,12 +18,7 @@ export { connectManaged } from './proxy.js';
 const receiptSchema = z.object({ url: z.string().url(), pid: z.number().int().positive(), instanceId: z.string().uuid(), startedAt: z.string().datetime() }).strict();
 export type ManagedReceipt = z.infer<typeof receiptSchema>;
 export type ManagedHealth = { running: true; receipt: ManagedReceipt } | { running: false; reason: string };
-const digest = (value: string) => createHash('sha256').update(value).digest();
 const guardMarker = 'owner.json';
-const processAlive = (pid: number): boolean => {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
-};
 
 /**
  * An interrupted startup can leave the acquisition directory behind. Reclaim it only
@@ -76,7 +73,7 @@ async function startupError(paths: ManagedPaths, token: string, error: unknown):
   await writeFile(join(paths.home, 'startup-error.json'), JSON.stringify({ at: new Date().toISOString(), message: new Redactor([token]).redact(message) }), { mode: 0o600 }).catch(() => {});
 }
 function pipePath(paths: ManagedPaths, instanceId: string): string {
-  return process.platform === 'win32' ? `\\\\.\\pipe\\grok-agent-bridge-${digest(paths.home).toString('hex').slice(0, 16)}-${instanceId}` : join(paths.home, `control-${instanceId}.sock`);
+  return controlPipe(paths, instanceId);
 }
 async function receiptAt(paths: ManagedPaths): Promise<ManagedReceipt> {
   const receipt = receiptSchema.parse(JSON.parse(await readFile(paths.receipt, 'utf8')));
@@ -85,16 +82,24 @@ async function receiptAt(paths: ManagedPaths): Promise<ManagedReceipt> {
   return receipt;
 }
 async function control(paths: ManagedPaths, receipt: ManagedReceipt, action: 'status' | 'stop'): Promise<ManagedReceipt> {
-  const token = await readCredential(paths);
+  const key = await ensureControlKey(paths), nonce = randomBytes(16).toString('hex');
+  const request = JSON.stringify({ v: 1, action, instanceId: receipt.instanceId, nonce, mac: controlMac(key, 'request', action, receipt.instanceId, nonce) });
   return new Promise((resolve, reject) => {
     const socket = createConnection(pipePath(paths, receipt.instanceId));
     let output = '', settled = false;
     const finish = (error?: Error) => { if (settled) return; settled = true; socket.destroy(); if (error) reject(error); else {
-      try { const value = receiptSchema.parse(JSON.parse(output)); if (value.instanceId !== receipt.instanceId || value.url !== receipt.url || value.pid !== receipt.pid) throw new Error(); resolve(value); }
-      catch { reject(new Error('Managed runtime identity could not be verified')); }
+      try {
+        const response = z.object({ receipt: z.string().max(4096), nonce: z.literal(nonce), mac: z.string() }).strict().parse(JSON.parse(output));
+        // Verify the exact receipt bytes before trusting the endpoint they name; otherwise a
+        // squatter could redirect the subsequent bearer-authenticated MCP connection.
+        if (!sameMac(response.mac, controlMac(key, 'response', nonce, response.receipt))) throw new Error();
+        const value = receiptSchema.parse(JSON.parse(response.receipt));
+        if (value.instanceId !== receipt.instanceId || value.url !== receipt.url || value.pid !== receipt.pid) throw new Error();
+        resolve(value);
+      } catch { reject(new Error('Managed runtime identity could not be verified')); }
     } };
     socket.setTimeout(3000, () => finish(new Error('Managed runtime is unresponsive')));
-    socket.setEncoding('utf8'); socket.on('connect', () => socket.write(JSON.stringify({ token, action, instanceId: receipt.instanceId }) + '\n'));
+    socket.setEncoding('utf8'); socket.on('connect', () => socket.write(request + '\n'));
     socket.on('data', (chunk: string) => { output += chunk; if (output.length > 8192) finish(new Error('Invalid managed runtime response')); else if (output.includes('\n')) finish(); });
     socket.on('error', () => finish(new Error('Managed runtime is unavailable'))); socket.on('end', () => finish(new Error('Managed runtime did not respond')));
   });
@@ -102,7 +107,8 @@ async function control(paths: ManagedPaths, receipt: ManagedReceipt, action: 'st
 
 /** Starts only an owner-enrolled bridge; startup never invents repository permissions. */
 export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: Services & { bridge?: { close(): Promise<void> } }): Promise<{ receipt: ManagedReceipt; close(): Promise<void> }> {
-  const token = await readCredential(paths);
+  await hardenHome(paths);
+  const token = await readCredential(paths), key = await ensureControlKey(paths);
   const releaseLease = await lease(paths);
   let services = servicesOverride;
   try {
@@ -117,6 +123,7 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
   catch (error) { await services.bridge?.close(); await releaseLease(); await startupError(paths, token, error); throw error; }
   const receipt: ManagedReceipt = { url: http.url, pid: process.pid, instanceId: randomUUID(), startedAt: new Date().toISOString() };
   const pipe = pipePath(paths, receipt.instanceId);
+  const accepted = new Set<string>(), acceptedOrder: string[] = [];
   let closing: Promise<void> | undefined;
   const stopSignal = () => { void close().catch(() => {}); };
   const server = createServer(socket => {
@@ -130,9 +137,13 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
       if (!input.includes('\n')) return;
       handled = true;
       try {
-        const request = z.object({ token: z.string().max(128), action: z.enum(['status', 'stop']), instanceId: z.literal(receipt.instanceId) }).strict().parse(JSON.parse(input));
-        if (!timingSafeEqual(digest(request.token), digest(token))) { socket.destroy(); return; }
-        socket.end(JSON.stringify(receipt) + '\n');
+        const request = z.object({ v: z.literal(1), action: z.enum(['status', 'stop']), instanceId: z.literal(receipt.instanceId), nonce: z.string().regex(/^[a-f0-9]{32}$/), mac: z.string() }).strict().parse(JSON.parse(input));
+        if (!sameMac(request.mac, controlMac(key, 'request', request.action, receipt.instanceId, request.nonce))) { socket.destroy(); return; }
+        if (accepted.has(request.nonce)) { socket.destroy(); return; }
+        accepted.add(request.nonce); acceptedOrder.push(request.nonce);
+        if (acceptedOrder.length > 256) accepted.delete(acceptedOrder.shift()!);
+        const body = JSON.stringify(receipt);
+        socket.end(JSON.stringify({ receipt: body, nonce: request.nonce, mac: controlMac(key, 'response', request.nonce, body) }) + '\n');
         if (request.action === 'stop') setImmediate(stopSignal);
       } catch { socket.destroy(); }
     });
@@ -171,7 +182,18 @@ export async function stopManaged(paths: ManagedPaths): Promise<{ stopped: boole
   let receipt: ManagedReceipt;
   try { receipt = await receiptAt(paths); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { stopped: true }; throw error; }
-  await control(paths, receipt, 'stop');
+  try { await control(paths, receipt, 'stop'); }
+  catch (error) {
+    // A crash, reboot, or forced kill leaves a valid receipt with no listener. Reclaim it
+    // only when the recorded process is provably gone; a live but unresponsive daemon is
+    // still an error because terminating it blindly could kill a reused pid.
+    if (!processAlive(receipt.pid)) {
+      await unlink(paths.receipt).catch(() => {});
+      if (process.platform !== 'win32') await unlink(pipePath(paths, receipt.instanceId)).catch(() => {});
+      return { stopped: true };
+    }
+    throw error;
+  }
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     try { const current = await receiptAt(paths); if (current.instanceId !== receipt.instanceId) return { stopped: true }; }

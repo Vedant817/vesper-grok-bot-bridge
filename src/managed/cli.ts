@@ -1,10 +1,11 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { access, readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { managedPaths } from './paths.js';
 import { setupManaged, enrollManagedRepository } from './install.js';
 import { callManaged, connectManaged, healthManaged, runManagedDaemon, startManaged, stopManaged } from './runtime.js';
 import { installAutostart, removeAutostart } from './startup.js';
+import { readCredential } from './credentials.js';
 
 export function parseManagedOptions(args: string[]) {
   const options: { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; verify?: { executable: string; args: string[] } } = {};
@@ -26,6 +27,19 @@ export function parseManagedOptions(args: string[]) {
   return options;
 }
 
+/** Every managed command accepts --home so a custom installation is never silently missed. */
+function takeHome(args: string[]): { home?: string; rest: string[] } {
+  const rest: string[] = [];
+  let home: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== '--home') { rest.push(args[i]); continue; }
+    const value = args[++i];
+    if (!value || value.startsWith('--')) throw new Error('Missing value for --home');
+    home = resolve(value);
+  }
+  return { home, rest };
+}
+
 async function toolArguments(source?: string): Promise<Record<string, unknown>> {
   let text = source ?? '{}';
   if (source?.startsWith('@')) {
@@ -37,6 +51,27 @@ async function toolArguments(source?: string): Promise<Record<string, unknown>> 
   return z.record(z.unknown()).parse(JSON.parse(text));
 }
 
+async function readJson(file: string): Promise<any | undefined> {
+  try { return JSON.parse(await readFile(file, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+}
+
+async function doctorReport(paths: ReturnType<typeof managedPaths>) {
+  const health = await healthManaged(paths);
+  const installation = await readJson(paths.installation);
+  const owner = await readJson(paths.config);
+  const credential = await readCredential(paths).then(() => 'ok', () => 'unavailable');
+  const startupError = await readJson(join(paths.home, 'startup-error.json'));
+  const autostart = await access(paths.launcher).then(() => 'launcher-present', () => 'launcher-missing');
+  return {
+    health,
+    installation: installation ? { version: installation.version, entrypoint: installation.entrypoint, installedAt: installation.installedAt } : 'missing',
+    enrolledRoots: Array.isArray(owner?.roots) ? owner.roots.length : 0,
+    credential,
+    autostart,
+    startupError: startupError ?? null
+  };
+}
+
 /** Managed commands deliberately derive paths and credentials locally. */
 export async function managedCli(args: string[]): Promise<boolean> {
   const [command, ...rest] = args;
@@ -46,19 +81,24 @@ export async function managedCli(args: string[]): Promise<boolean> {
     const options = parseManagedOptions(rest[0] && !rest[0].startsWith('--') ? ['--repository', rest[0], ...rest.slice(1)] : rest);
     console.log(JSON.stringify(await enrollManagedRepository(options.repository ?? process.cwd(), options.home, options.verify), null, 2)); return true;
   }
-  const paths = managedPaths();
+  const { home, rest: remaining } = takeHome(rest);
+  const paths = managedPaths(home);
   if (command === 'call') {
-    if (!rest[0] || !/^agent_[a-z_]+$/.test(rest[0]) || rest.length > 2) throw new Error('Usage: grok-agent-bridge call <agent_tool> [JSON or @arguments.json]');
-    console.log(JSON.stringify(await callManaged(paths, rest[0], await toolArguments(rest[1])), null, 2)); return true;
+    if (!remaining[0] || !/^agent_[a-z_]+$/.test(remaining[0]) || remaining.length > 2) throw new Error('Usage: grok-agent-bridge call <agent_tool> [JSON or @arguments.json]');
+    console.log(JSON.stringify(await callManaged(paths, remaining[0], await toolArguments(remaining[1])), null, 2)); return true;
   }
   if (command === 'autostart') {
-    if (rest.length !== 1 || !['enable', 'disable'].includes(rest[0])) throw new Error('Usage: grok-agent-bridge autostart enable|disable');
-    console.log(JSON.stringify(await (rest[0] === 'enable' ? installAutostart(paths) : removeAutostart(paths)), null, 2)); return true;
+    if (remaining.length !== 1 || !['enable', 'disable'].includes(remaining[0])) throw new Error('Usage: grok-agent-bridge autostart enable|disable');
+    console.log(JSON.stringify(await (remaining[0] === 'enable' ? installAutostart(paths) : removeAutostart(paths)), null, 2)); return true;
   }
-  if (rest.length) throw new Error(`Unexpected arguments for ${command}`);
+  if (remaining.length) throw new Error(`Unexpected arguments for ${command}`);
   if (command === 'daemon' || command === 'managed-daemon') await runManagedDaemon(paths);
   if (command === 'connect') await connectManaged(paths);
-  if (command === 'doctor') { const health = await healthManaged(paths); console.log(JSON.stringify(health, null, 2)); }
+  if (command === 'doctor') {
+    const report = await doctorReport(paths);
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.health.running) process.exitCode = 1;
+  }
   if (command === 'start') console.log(JSON.stringify(await startManaged(paths), null, 2));
   if (command === 'stop') console.log(JSON.stringify(await stopManaged(paths), null, 2));
   return true;

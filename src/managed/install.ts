@@ -1,11 +1,13 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, readFile, writeFile, rename, access, cp, copyFile, open, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, access, cp, copyFile, open, unlink, rm, readdir, lstat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
+import { z } from 'zod';
 import { managedPaths } from './paths.js';
 import { ensureCredential, hardenHome } from './credentials.js';
+import { processAlive } from './process.js';
 import { startManaged, stopManaged, healthManaged } from './runtime.js';
 import { installAutostart } from './startup.js';
 import { registerManagedClients } from './clients.js';
@@ -69,18 +71,55 @@ export function launcherSource(home: string): string {
 async function addUserPath(bin: string): Promise<void> {
   if (process.platform !== 'win32') return;
   const value = `'${bin.replace(/'/g, "''")}'`;
-  await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $bin=${value}; $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not (($p -split ';') | Where-Object {$_.TrimEnd('\\') -ieq $bin.TrimEnd('\\')})){[Environment]::SetEnvironmentVariable('Path',(($p.TrimEnd(';')+';'+$bin).TrimStart(';')),'User')}`], { windowsHide: true, timeout: 10000 });
+  await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $bin=${value}; $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''}; if(-not (($p -split ';') | Where-Object {$_.TrimEnd('\\') -ieq $bin.TrimEnd('\\')})){[Environment]::SetEnvironmentVariable('Path',(($p.TrimEnd(';')+';'+$bin).TrimStart(';')),'User')}`], { windowsHide: true, timeout: 10000 });
   const current = process.env.PATH ?? '';
   if (!current.toLowerCase().split(';').includes(bin.toLowerCase())) process.env.PATH = `${current};${bin}`;
 }
+/**
+ * Reclaim a setup lock only when its owner is gone. A lock file that exists but cannot
+ * name a live owner is removed once it is old enough that a competing setup would have
+ * finished writing it; otherwise a young, unparseable file may still be mid-write.
+ */
+async function staleSetupLock(file: string): Promise<boolean> {
+  try {
+    const previous = z.object({ pid: z.number().int().positive(), id: z.string().uuid() }).passthrough().parse(JSON.parse(await readFile(file, 'utf8')));
+    if (processAlive(previous.pid)) return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    const info = await lstat(file).catch(() => undefined);
+    if (!info || Date.now() - info.mtimeMs < 30000) return false;
+  }
+  await unlink(file).catch(() => {});
+  return true;
+}
+
+export async function acquireSetupLock(file: string): Promise<{ release(): Promise<void> }> {
+  const id = randomUUID();
+  for (let attempt = 0; ; attempt++) {
+    let handle;
+    try { handle = await open(file, 'wx', 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (attempt === 0 && await staleSetupLock(file)) continue;
+      throw new Error(`Another setup is running, or an interrupted setup left ${file}. Wait for the other setup to exit; a lock whose process is gone is reclaimed automatically.`);
+    }
+    try { await handle.writeFile(JSON.stringify({ pid: process.pid, id, startedAt: new Date().toISOString() })); }
+    catch (error) { await handle.close().catch(() => {}); await unlink(file).catch(() => {}); throw error; }
+    return {
+      release: async () => {
+        await handle.close().catch(() => {});
+        try { if (JSON.parse(await readFile(file, 'utf8')).id === id) await unlink(file); } catch {}
+      }
+    };
+  }
+}
+
 export async function setupManaged(options: SetupOptions = {}): Promise<Record<string, unknown>> {
   const paths = managedPaths(options.home);
   await hardenHome(paths);
-  const lockFile = join(paths.home, 'setup.lock');
-  let lock;
-  try { lock = await open(lockFile, 'wx', 0o600); } catch (error: any) { if (error.code === 'EEXIST') throw new Error('Another setup is running, or an interrupted setup left setup.lock. Check the installer process before removing that lock.'); throw error; }
-  try { await lock.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); return await setupUnlocked(options); }
-  finally { await lock.close(); await unlink(lockFile); }
+  const lock = await acquireSetupLock(join(paths.home, 'setup.lock'));
+  try { return await setupUnlocked(options); }
+  finally { await lock.release(); }
 }
 async function setupUnlocked(options: SetupOptions): Promise<Record<string, unknown>> {
   const paths = managedPaths(options.home);
@@ -91,24 +130,29 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
   if (!pkg?.name || !await readJson(join(source, 'package.json'))) throw new Error('Installation package metadata unavailable');
   await access(join(source, 'dist', 'index.js'));
   const stage = join(paths.home, 'releases', `${pkg.version}-${randomUUID()}`);
-  await mkdir(stage, { recursive: true, mode: 0o700 });
-  const npm = await npmLaunch();
-  await cp(join(source, 'dist'), join(stage, 'dist'), { recursive: true, errorOnExist: true, force: false });
-  await copyFile(join(source, 'package.json'), join(stage, 'package.json'));
-  let lockFile = join(source, 'package-lock.json');
-  try { await access(lockFile); } catch { lockFile = join(source, 'runtime-lock.json'); }
-  await copyFile(lockFile, join(stage, 'package-lock.json'));
-  const lockHash = createHash('sha256').update(await readFile(join(stage, 'package-lock.json'))).digest('hex');
-  await run(npm.executable, [...npm.args, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stage, windowsHide: true, timeout: 180000, maxBuffer: 2 * 1024 * 1024 });
-  const entrypoint = join(stage, 'dist', 'index.js');
-  await access(entrypoint);
-  // A fully installed package must load before the active installation is replaced.
-  await run(process.execPath, ['--input-type=module', '-e', 'await import(process.argv[1])', pathToFileURL(entrypoint).href], { cwd: stage, windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024 });
+  const npm = await npmLaunch(), entrypoint = join(stage, 'dist', 'index.js');
+  let lockHash = '';
+  try {
+    await mkdir(stage, { recursive: true, mode: 0o700 });
+    await cp(join(source, 'dist'), join(stage, 'dist'), { recursive: true, errorOnExist: true, force: false });
+    await copyFile(join(source, 'package.json'), join(stage, 'package.json'));
+    let lockFile = join(source, 'package-lock.json');
+    try { await access(lockFile); } catch { lockFile = join(source, 'runtime-lock.json'); }
+    await copyFile(lockFile, join(stage, 'package-lock.json'));
+    lockHash = createHash('sha256').update(await readFile(join(stage, 'package-lock.json'))).digest('hex');
+    await run(npm.executable, [...npm.args, 'ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: stage, windowsHide: true, timeout: 180000, maxBuffer: 2 * 1024 * 1024 });
+    await access(entrypoint);
+    // A fully installed package must load before the active installation is replaced.
+    await run(process.execPath, ['--input-type=module', '-e', 'await import(process.argv[1])', pathToFileURL(entrypoint).href], { cwd: stage, windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024 });
+  } catch (error) {
+    await rm(stage, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
   let enrollment: unknown;
   if (!await readJson(paths.config)) await atomicJson(paths.config, { stateDirectory: join(paths.home, 'state'), roots: [] });
   try { enrollment = await enrollManagedRepository(options.repository ?? process.cwd(), paths.home, options.verify, false); } catch (error: any) { enrollment = { enrolled: false, reason: error.message }; }
   const previous = await readJson(paths.installation);
-  await stopManaged(paths);
+  if ((await healthManaged(paths)).running) await stopManaged(paths);
   await atomicJson(paths.installation, { entrypoint, node: process.execPath, version: pkg.version, dependencyLockSha256: lockHash, installedAt: new Date().toISOString(), previous: previous ? { entrypoint: previous.entrypoint, node: previous.node, version: previous.version } : undefined });
   try {
   await writeFile(paths.launcher, launcherSource(paths.home), { mode: 0o600 });
@@ -121,9 +165,13 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
   const clients = options.registerClients === false ? { status: 'skipped' } : await registerManagedClients(paths);
   const startup = options.autostart === false ? { mode: 'disabled' } : enrolled ? await installAutostart(paths) : { mode: 'pending-enrollment' };
   let health: unknown = { ok: false, reason: 'Repository enrollment with a verifier is required' };
-  if (enrolled) {
-    try { health = await startManaged(paths); }
-    catch (error) { throw error; }
+  if (enrolled) health = await startManaged(paths);
+  // Keep the active release plus the one referenced for rollback; drop abandoned stages.
+  const releases = join(paths.home, 'releases');
+  const keep = new Set([stage, typeof previous?.entrypoint === 'string' ? dirname(previous.entrypoint) : undefined].filter((value): value is string => !!value));
+  for (const entry of await readdir(releases, { withFileTypes: true }).catch(() => [])) {
+    const directory = join(releases, entry.name);
+    if (entry.isDirectory() && !keep.has(directory)) await rm(directory, { recursive: true, force: true }).catch(() => {});
   }
   return { home: paths.home, installedEntrypoint: entrypoint, version: pkg.version, enrollment, enrollmentRequired: !enrolled, clients, startup, health };
   } catch (error) {

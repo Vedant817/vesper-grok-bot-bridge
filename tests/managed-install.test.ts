@@ -1,12 +1,15 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
+import { access, mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse } from 'jsonc-parser';
 import { managedPaths } from '../src/managed/paths.js';
-import { inferVerifier, launcherSource } from '../src/managed/install.js';
-import { startupScript, startupTaskName } from '../src/managed/startup.js';
+import { acquireSetupLock, inferVerifier, launcherSource } from '../src/managed/install.js';
+import { daemonVbs, startupScript, startupTaskName } from '../src/managed/startup.js';
 import { mergeOpenCodeConfig } from '../src/managed/clients.js';
+import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
 
 const dirs: string[] = [];
 async function temporary() { const directory = await mkdtemp(join(tmpdir(), 'bridge-install-test-')); dirs.push(directory); return directory; }
@@ -50,10 +53,51 @@ describe('managed installation contracts', () => {
   it('scopes logon startup identity to installation and requests restart without elevation', () => {
     const a = managedPaths(join(tmpdir(), "user's bridge")), b = managedPaths(join(tmpdir(), 'other-bridge'));
     expect(startupTaskName(a)).not.toEqual(startupTaskName(b));
-    const script = startupScript(a, 'C:\\Node\\node.exe');
+    const script = startupScript(a);
     expect(script).toContain('-RunLevel Limited'); expect(script).toContain('-LogonType Interactive');
     expect(script).toContain('-Hidden'); expect(script).toContain('-RestartCount 3');
     expect(script).toContain('-ExecutionTimeLimit ([TimeSpan]::Zero)');
     expect(script).toContain("user''s bridge"); expect(script).not.toContain('credential.bin');
+    expect(script).toContain('wscript.exe'); expect(script).toContain('daemon.vbs');
+  });
+  it('runs the daemon through a hidden VBS trampoline rather than a visible console', () => {
+    const paths = managedPaths(join(tmpdir(), "user's bridge"));
+    const vbs = daemonVbs(paths, 'C:\\Node\\node.exe');
+    expect(vbs).toContain('CreateObject("WScript.Shell").Run');
+    expect(vbs).toContain(', 0, True');
+    expect(vbs).toContain('daemon');
+    expect(vbs).not.toContain('credential');
+  });
+  it('keeps non-ASCII home paths intact through the credential helper', async () => {
+    const directory = await temporary(), paths = managedPaths(join(directory, 'José 工具'));
+    const token = await ensureCredential(paths);
+    expect(token).toMatch(/^[a-f0-9]{64}$/);
+    expect(await readCredential(paths)).toBe(token);
+  });
+  it('refuses to strip ACLs from an unrelated non-empty directory', async () => {
+    const directory = await temporary();
+    await writeFile(join(directory, 'notes.txt'), 'keep');
+    await expect(hardenHome(managedPaths(directory))).rejects.toThrow('not a managed bridge home');
+    expect(await readFile(join(directory, 'notes.txt'), 'utf8')).toBe('keep');
+  });
+  it('reclaims an interrupted setup lock and never deletes a live owner', async () => {
+    const directory = await temporary(), file = join(directory, 'setup.lock');
+    const exited = spawn(process.execPath, ['-e', ''], { windowsHide: true });
+    const deadPid = exited.pid;
+    await new Promise<void>(resolve => exited.on('exit', () => resolve()));
+    if (!deadPid) throw new Error('Spawned helper did not report a pid');
+    await writeFile(file, JSON.stringify({ pid: deadPid, id: randomUUID(), startedAt: new Date().toISOString() }));
+    const lock = await acquireSetupLock(file);
+    await lock.release();
+    await expect(access(file)).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(file, JSON.stringify({ pid: process.pid, id: randomUUID(), startedAt: new Date().toISOString() }));
+    await expect(acquireSetupLock(file)).rejects.toThrow('Another setup is running');
+  });
+  it('does not release a setup lock that was replaced by another owner', async () => {
+    const directory = await temporary(), file = join(directory, 'setup.lock');
+    const lock = await acquireSetupLock(file);
+    await writeFile(file, JSON.stringify({ pid: process.pid, id: randomUUID() }));
+    await lock.release();
+    await expect(access(file)).resolves.toBeUndefined();
   });
 });
