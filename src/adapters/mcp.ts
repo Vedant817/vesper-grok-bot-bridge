@@ -75,7 +75,7 @@ export class McpConnection implements ToolCaller {
   }
   async call<T = any>(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
     // Native startup may negotiate several RPCs; owner verification itself has a 120s budget.
-    const timeout = name === 'agent_verify' ? 300000 : ['agent_start', 'agent_attach', 'agent_resume', 'agent_followup'].includes(name) ? 600000 : 30000;
+    const timeout = name === 'agent_verify' ? 300000 : ['agent_start', 'agent_attach', 'agent_resume', 'agent_followup', 'agent_dispatch'].includes(name) ? 600000 : name === 'agent_wait' ? 45000 : 30000;
     const result = await this.client.callTool({ name, arguments: args }, undefined, { signal, timeout });
     if (result.isError) {
       const detail = name.startsWith('agent_') ? (result.content as any[]).filter(v => v.type === 'text' && typeof v.text === 'string').map(v => v.text).join('\n').slice(0, 2000) : '';

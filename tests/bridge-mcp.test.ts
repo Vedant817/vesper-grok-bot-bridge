@@ -19,6 +19,7 @@ it.each(['/mcp', '/sse'])('exposes the actual bridge workflow over %s without an
   try {
     const tools = await client.client.listTools();
     expect(tools.tools.some(t => t.name === 'agent_attach')).toBe(true);
+    expect(['agent_dispatch', 'agent_monitor', 'agent_wait'].every(name => tools.tools.some(t => t.name === name))).toBe(true);
     expect(tools.tools.some(t => t.name === 'question_resolve')).toBe(false);
     const catalog = await client.call<any[]>('agent_discover', {}); expect(catalog.find(p => p.id === 'codex')?.models).toEqual(['fixture']);
     const input = { provider: 'codex', model: 'fixture', directory: repository, task: 'Inspect fixture', requestId: 'stable-request' };
@@ -30,6 +31,10 @@ it.each(['/mcp', '/sse'])('exposes the actual bridge workflow over %s without an
       throw new Error(`Session did not reach ${status}`);
     };
     const pending = await waitFor('awaiting_input'); expect(pending.pending[0].type).toBe('permission');
+    const dispatched = await client.call<any>('agent_dispatch', { taskKey: 'fixture-task', requestId: 'bind-existing', provider: 'codex', model: 'fixture', directory: repository, instruction: 'Continue after approval', sessionId: session.id });
+    expect(dispatched.instructionSubmitted).toBe(false); expect(dispatched.session.id).toBe(session.id);
+    const observed = await client.call<any[]>('agent_monitor', {}); expect(observed.find(s => s.id === session.id)?.pending).toHaveLength(1);
+    const waiting = await client.call<any>('agent_wait', { sessionId: session.id, afterCursor: pending.cursor, timeoutMs: 20 }); expect(waiting.status).toBe('awaiting_input');
     await client.call('agent_respond', { sessionId: session.id, requestId: pending.pending[0].id, allow: false });
     await waitFor('awaiting_review');
     const evidence = await client.call<any>('agent_verify', { sessionId: session.id });

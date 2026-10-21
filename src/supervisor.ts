@@ -34,6 +34,7 @@ export class Supervisor {
           continue;
         }
         await this.memory.append(event);
+        if (event.type === 'pendingResolved') continue;
         if (event.type === 'failed') return { state: 'failed', reason: this.redactor.redact(event.error), turns };
         if (event.type === 'permission') {
           const decision = classifyPermission(event.request, config.cwd);

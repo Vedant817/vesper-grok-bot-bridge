@@ -2,9 +2,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { BridgeService } from './service.js';
 import type { Redactor } from '../safety.js';
+import type { TaskRouter } from './router.js';
 
 /** Grok Bot (or another MCP host) is the reasoning supervisor. */
-export function registerBridgeTools(server: McpServer, bridge: BridgeService, redactor: Redactor): void {
+export function registerBridgeTools(server: McpServer, bridge: BridgeService, redactor: Redactor, router?: TaskRouter): void {
   const id = z.string().min(1).max(256);
   const task = z.string().min(1).max(16000);
   const invoke = async (fn: () => unknown | Promise<unknown>) => {
@@ -12,6 +13,9 @@ export function registerBridgeTools(server: McpServer, bridge: BridgeService, re
     catch (error) { return { isError: true, content: [{ type: 'text' as const, text: redactor.redact(error instanceof Error ? error.message : 'Bridge operation failed') }] }; }
   };
   server.registerTool('agent_discover', { description: 'Discover installed coding providers, exact model IDs, availability and limitations. Grok Bot is the MCP caller; never substitute Grok Build for Grok Bot.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => invoke(() => bridge.discover()));
+  if (router) server.registerTool('agent_dispatch', { description: 'Route an explicitly identified task to its exact provider/model/directory. Start when absent; continue a completed or disconnected session; observe active or terminal work without submitting the instruction. Use a fresh taskKey for independent work, stable requestId for retries. Inspect instructionSubmitted. Never retries an uncertain continuation.', inputSchema: { taskKey: id, requestId: id, provider: id, model: id, directory: z.string().min(1).max(4096), instruction: task, intent: z.enum(['auto', 'new', 'continue']).default('auto'), sessionId: id.optional() } }, async args => invoke(() => router.dispatch(args)));
+  server.registerTool('agent_monitor', { description: 'Observe progress, pending input, review/recovery needs and classified failures. A stall warning means stale progress, not proven failure. Authentication and human-only consent must use native handoff.', inputSchema: { stallAfterMs: z.number().int().min(1).max(86400000).optional() }, annotations: { readOnlyHint: true } }, async args => invoke(() => bridge.monitor(args)));
+  server.registerTool('agent_wait', { description: 'Wait up to 30 seconds for activity, pending input, review or terminal status. Continue from the returned cursor; no native mutation or replay.', inputSchema: { sessionId: id, afterCursor: z.number().int().min(0).default(0), timeoutMs: z.number().int().min(0).max(30000).default(30000) }, annotations: { readOnlyHint: true } }, async (args, extra) => invoke(() => bridge.wait(args.sessionId, args.afterCursor, args.timeoutMs, extra.signal)));
   server.registerTool('agent_start', { description: 'Start the chosen coding provider and model in an isolated worktree of an owner-enrolled directory. Supply a stable unique requestId for retry safety; retain the returned session ID.', inputSchema: { provider: id, model: id, directory: z.string().min(1).max(4096), task, requestId: id } }, async args => invoke(() => bridge.start(args)));
   server.registerTool('agent_sessions', { description: 'List retained bridge sessions, native session IDs and review state.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => invoke(() => bridge.list()));
   server.registerTool('agent_read', { description: 'Read redacted session activity after a cursor, pending questions/permissions and task status. A completed worker turn still requires review and verification.', inputSchema: { sessionId: id, cursor: z.number().int().min(0).default(0) }, annotations: { readOnlyHint: true } }, async args => invoke(() => bridge.read(args.sessionId, args.cursor)));
