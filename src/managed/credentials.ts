@@ -76,9 +76,17 @@ export async function readCredential(paths: ManagedPaths): Promise<string> {
   if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) throw new Error('Managed credential permissions must be private');
   const value = await readFile(paths.token, 'utf8');
   const prefix = 'grok-bridge-dpapi-v1\n';
-  const token = process.platform === 'win32'
-    ? value.startsWith(prefix) ? await windowsHelper(scripts.unprotect, encode(value.slice(prefix.length))) : ''
-    : value;
+  let token = value;
+  if (process.platform === 'win32') {
+    if (!value.startsWith(prefix)) token = '';
+    else {
+      try { token = await windowsHelper(scripts.unprotect, encode(value.slice(prefix.length))); }
+      // A blob protected under another profile/key, or one damaged by an interrupted write, is
+      // corruption rather than a machine failure. Classify it as invalid so setup can quarantine
+      // and rotate the token instead of wedging forever.
+      catch { throw new Error('Invalid managed credential'); }
+    }
+  }
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid managed credential');
   return token;
 }

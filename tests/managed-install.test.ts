@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { access, mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
+import { access, mkdtemp, writeFile, readFile, rm, mkdir, utimes } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -71,9 +71,24 @@ describe('managed installation contracts', () => {
   it('keeps the Windows CLI shim ASCII-only and locates the launcher at runtime', () => {
     const shim = cliShim();
     expect(shim.startsWith('@echo off')).toBe(true);
+    expect(shim).toContain('setlocal DisableDelayedExpansion');
     expect(shim).toContain('%~dp0');
     expect(shim).toContain('launcher.cjs');
     expect(/^[\x00-\x7F]+$/.test(shim)).toBe(true);
+  });
+  it('rejects Windows home paths that PATH or logon expansion would corrupt', () => {
+    if (process.platform !== 'win32') return;
+    expect(() => managedPaths(join(tmpdir(), 'semi;colon'))).toThrow('cannot contain');
+    expect(() => managedPaths(join(tmpdir(), 'percent%var'))).toThrow('cannot contain');
+  });
+  it('reclaims a setup lock whose live pid exceeded the hard age cap', async () => {
+    const directory = await temporary(), file = join(directory, 'setup.lock');
+    await writeFile(file, JSON.stringify({ pid: process.pid, id: randomUUID(), startedAt: new Date().toISOString() }));
+    const old = new Date(Date.now() - 16 * 60 * 1000);
+    await utimes(file, old, old);
+    const lock = await acquireSetupLock(file);
+    await lock.release();
+    await expect(access(file)).rejects.toMatchObject({ code: 'ENOENT' });
   });
   it('encodes logon scripts as UTF-16LE so Unicode homes survive WSH decoding', () => {
     const paths = managedPaths(join(tmpdir(), 'José 工具'));

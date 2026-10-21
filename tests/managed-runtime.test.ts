@@ -166,4 +166,17 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
       expect((await readdir(isolated)).some(file => file.startsWith('credential.bin.invalid-'))).toBe(true);
     } finally { await rm(isolated, { recursive: true, force: true }); }
   });
+
+  it('quarantines a DPAPI-prefixed blob that cannot be decrypted', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-undecryptable-credential-'));
+    try {
+      const paths = managedPaths(isolated);
+      await ensureCredential(paths);
+      await writeFile(paths.token, `grok-bridge-dpapi-v1\n${Buffer.from('not a protected payload').toString('base64')}`, { mode: 0o600 });
+      const replacement = await ensureCredential(paths);
+      expect(replacement).toMatch(/^[a-f0-9]{64}$/);
+      expect(await readCredential(paths)).toBe(replacement);
+      expect((await readdir(isolated)).some(file => file.startsWith('credential.bin.invalid-'))).toBe(true);
+    } finally { await rm(isolated, { recursive: true, force: true }); }
+  });
 });
