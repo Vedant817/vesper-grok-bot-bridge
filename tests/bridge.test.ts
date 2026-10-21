@@ -77,6 +77,22 @@ describe('portable session bridge', { timeout: 30000 }, () => {
     const updated = await service.verify(s.id); expect((await service.finish(s.id, updated.id)).status).toBe('finished');
     await new Promise(r => setTimeout(r, 30)); expect(service.read(s.id).status).toBe('finished');
   });
+  it('rejects writes during shutdown and permits fresh verification only after confirmed stop', async () => {
+    const s = await service.start(input(repository)); worker.queue.push({ type: 'completed', summary: 'Done' });
+    await wait(() => service.read(s.id).status === 'awaiting_review');
+    const evidence = await service.verify(s.id);
+    worker.cancel = async () => { await writeFile(join(s.cwd, 'source.txt'), 'late shutdown change'); };
+    await expect(service.finish(s.id, evidence.id)).rejects.toThrow('during worker shutdown');
+    expect(service.read(s.id).status).toBe('awaiting_review'); expect(service.read(s.id).evidence).toBeUndefined();
+    const next = await service.verify(s.id); expect((await service.finish(s.id, next.id)).status).toBe('finished');
+  });
+  it('cannot accept unacknowledged shutdown by verifying again', async () => {
+    const s = await service.start(input(repository)); worker.queue.push({ type: 'completed', summary: 'Done' });
+    await wait(() => service.read(s.id).status === 'awaiting_review'); const evidence = await service.verify(s.id);
+    worker.cancel = async () => { throw new Error('not acknowledged'); };
+    await expect(service.finish(s.id, evidence.id)).rejects.toThrow('not acknowledged'); expect(service.read(s.id).status).toBe('failed');
+    await expect(service.verify(s.id)).rejects.toThrow('completed turn'); await expect(service.finish(s.id, evidence.id)).rejects.toThrow('Passing');
+  });
   it('keeps questions pending until a valid option and prevents blocked permission overrides', async () => {
     const s = await service.start(input(repository));
     worker.queue.push({ type: 'question', id: 'q1', question: 'Which?', options: ['one', 'two'] });

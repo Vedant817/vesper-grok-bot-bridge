@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { getEventListeners } from 'node:events';
 import { BridgeService } from '../src/bridge/service.js';
 import { t3ConnectionSchema } from '../src/bridge/config.js';
-import { classifyFailure, humanQuestionReason, observeSession } from '../src/bridge/monitoring.js';
+import { annotatePending, classifyFailure, humanQuestionReason, observeSession } from '../src/bridge/monitoring.js';
 import { AsyncQueue } from '../src/rpc.js';
 import { git } from '../src/worktree.js';
 import { Redactor } from '../src/safety.js';
@@ -22,6 +22,11 @@ class WorkerFixture implements Worker {
 }
 
 describe('monitoring diagnostics', () => {
+  it('does not let answer options mask a terse human-only question', () => {
+    for (const question of ['Password?', 'API key?', 'MFA?']) {
+      expect(annotatePending({ type: 'question', id: 'secure', question, options: ['Saved credential', 'Cancel'] }).requiresHuman).toBe(true);
+    }
+  });
   it('requires explicit HTTPS and isolated credential references for Connect mode', () => {
     const valid = { projectId: 'project', endpoint: 'https://connect.example.test/mcp', connect: { credentialRef: 'a'.repeat(64), bridge: { command: 't3', args: ['connect'] } } };
     expect(t3ConnectionSchema.safeParse(valid).success).toBe(true);

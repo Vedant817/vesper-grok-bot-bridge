@@ -29,7 +29,7 @@ export function humanQuestionReason(question: string): string | undefined {
 }
 
 export function annotatePending(pending: PendingRequest): PendingRequest {
-  const reason = pending.type === 'question' ? humanQuestionReason([pending.question, ...(pending.options ?? [])].join('\n')) : undefined;
+  const reason = pending.type === 'question' ? humanQuestionReason(pending.question) || pending.options?.map(humanQuestionReason).find(Boolean) : undefined;
   return reason ? { ...pending, requiresHuman: true, reason } : pending;
 }
 

@@ -137,7 +137,7 @@ export class BridgeService {
       const s = l.snapshot, pending = s.pending.find(p => p.id === requestId);
       if (!pending || !l.worker || s.status !== 'awaiting_input') throw new Error('No live pending request');
       if (pending.type === 'question') {
-        if (pending.requiresHuman || humanQuestionReason([pending.question, ...(pending.options ?? [])].join('\n'))) throw new Error('Human-only secure input requires the native authentication or consent handoff; an AI caller cannot approve it.');
+        if (pending.requiresHuman || humanQuestionReason(pending.question) || pending.options?.some(option => humanQuestionReason(option))) throw new Error('Human-only secure input requires the native authentication or consent handoff; an AI caller cannot approve it.');
         bounded(response.answer ?? '', 'answer');
         if (pending.options?.length && !pending.options.includes(response.answer!) && !pending.allowCustomAnswer) throw new Error('Answer must match an offered option');
       } else if (response.allow) {
@@ -205,7 +205,15 @@ export class BridgeService {
       if (s.status !== 'awaiting_review' || !s.evidence?.passed || s.evidence.id !== evidenceId) throw new Error('Passing current verification evidence is required');
       await this.validatePaths(s);
       if (await this.fingerprint(s) !== s.evidence.contentHash) throw new Error('Worktree changed after verification');
-      l.abort.abort(); await this.stop(l); s.status = 'finished'; await this.persist(l); return this.public(s);
+      l.abort.abort(); const stopped = await this.stop(l);
+      if (!stopped || await this.fingerprint(s) !== s.evidence.contentHash) {
+        s.evidence = undefined;
+        if (stopped) l.abort = new AbortController();
+        else { s.status = 'failed'; s.error = 'Worker shutdown was not acknowledged; native execution outcome is unknown.'; }
+        await this.persist(l);
+        throw new Error(stopped ? 'Worktree changed during worker shutdown; verify again' : 'Worker shutdown was not acknowledged; inspect the native session before accepting work');
+      }
+      s.status = 'finished'; await this.persist(l); return this.public(s);
     });
   }
   async cancel(id: string) {
@@ -229,12 +237,13 @@ export class BridgeService {
     await this.releaseOwner();
   }
   private pump(l: Live) {
+    const signal = l.abort.signal;
     void (async () => {
       try {
-        while (!l.abort.signal.aborted && l.worker) {
-          const event = await l.worker.next(l.abort.signal);
+        while (!signal.aborted && l.worker) {
+          const event = await l.worker.next(signal);
           await this.lock(l, async () => {
-            if (l.abort.signal.aborted || ['failed', 'cancelled', 'finished', 'interrupted'].includes(l.snapshot.status)) return;
+            if (signal.aborted || ['failed', 'cancelled', 'finished', 'interrupted'].includes(l.snapshot.status)) return;
             const s = l.snapshot; s.lastActivityAt = new Date().toISOString(); s.nativeId = l.worker?.nativeSessionId ?? s.nativeId;
             if (++l.received >= 10000) throw new Error('Session event limit reached');
             if (event.type === 'output') {
@@ -257,8 +266,8 @@ export class BridgeService {
           });
         }
       } catch (error) {
-        if (!l.abort.signal.aborted) await this.lock(l, async () => {
-          if (l.abort.signal.aborted || ['cancelled', 'finished', 'interrupted'].includes(l.snapshot.status)) return;
+        if (!signal.aborted) await this.lock(l, async () => {
+          if (signal.aborted || ['cancelled', 'finished', 'interrupted'].includes(l.snapshot.status)) return;
           await this.failControl(l, error);
         });
       }
@@ -289,8 +298,8 @@ export class BridgeService {
     };
     const worker = l.worker; l.worker = undefined;
     const interrupted = await bounded(Promise.resolve().then(() => worker?.cancel()));
-    await bounded(Promise.resolve().then(() => worker?.close()));
-    return interrupted;
+    const closed = await bounded(Promise.resolve().then(() => worker?.close()));
+    return interrupted && closed;
   }
   private async fingerprint(s: SessionSnapshot) { return digest(await git(s.worktree, ['rev-parse', 'HEAD']) + '\0' + (await changes(s.worktree)).contentHash); }
   private lock<T>(l: Live, operation: (live: Live) => Promise<T>): Promise<T> { const result = l.tail.then(() => operation(l)); l.tail = result.catch(() => {}); return result; }
