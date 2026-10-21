@@ -74,9 +74,10 @@ export async function autostartStatus(paths: ManagedPaths): Promise<'scheduled-t
   } catch { /* A missing APPDATA or unreadable Startup folder is reported below. */ }
   try {
     const description = literal(`Managed by GrokAgentBridge: ${paths.home}`);
-    // End with a successful statement: Windows PowerShell derives the process exit code
-    // from $?, so a suppressed "task not found" followed by a false `if` exits 1.
-    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $t=Get-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -ErrorAction SilentlyContinue; if($t -and $t.Description -eq ${description}){Write-Output 'present'}; Write-Output 'checked'`], { windowsHide: true, timeout: 10000 });
+    // Enumerate with -ErrorAction Stop: a query failure must be distinguishable from a
+    // missing task. Ending with a successful statement keeps Windows PowerShell's
+    // $?-derived exit code at zero when the task is simply absent.
+    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Write-Output 'present'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
     return stdout.includes('present') ? 'scheduled-task' : 'disabled';
   } catch { return 'unknown'; }
 }
@@ -86,13 +87,17 @@ export async function removeAutostart(paths: ManagedPaths): Promise<{ removed: b
   const description = literal(`Managed by GrokAgentBridge: ${paths.home}`);
   let schedulerError: unknown, removed = false;
   try {
-    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -ErrorAction SilentlyContinue; if($task -and $task.Description -eq ${description}){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false; Write-Output 'removed'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
+    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false; Write-Output 'removed'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
     if (stdout.includes('removed')) removed = true;
   } catch (error) { schedulerError = error; }
   const file = startupFile();
   const existing = await readVbs(file);
   if (existing?.startsWith(ownership(paths) + '\r\n')) { await unlink(file); removed = true; }
-  if (schedulerError && !removed) throw new Error('Could not inspect/remove the managed scheduled task');
+  // A successful Startup-file removal must not hide a failed task query: the scheduled
+  // task may still exist, and the caller needs to know that disabling was incomplete.
+  if (schedulerError) throw new Error(removed
+    ? 'Could not inspect/remove the managed scheduled task; the Startup-folder entry was removed'
+    : 'Could not inspect/remove the managed scheduled task');
   await unlink(daemonScript(paths)).catch(() => {});
   return { removed };
 }
