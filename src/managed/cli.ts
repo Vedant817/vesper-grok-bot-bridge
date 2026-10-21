@@ -2,10 +2,10 @@ import { access, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { managedPaths } from './paths.js';
-import { setupManaged, enrollManagedRepository } from './install.js';
+import { setupManaged, enrollManagedRepository, acquireSetupLock } from './install.js';
 import { callManaged, connectManaged, healthManaged, runManagedDaemon, startManaged, stopManaged } from './runtime.js';
-import { installAutostart, removeAutostart } from './startup.js';
-import { readCredential } from './credentials.js';
+import { installAutostart, removeAutostart, autostartStatus } from './startup.js';
+import { hardenHome, readCredential } from './credentials.js';
 
 export function parseManagedOptions(args: string[]) {
   const options: { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; verify?: { executable: string; args: string[] } } = {};
@@ -54,22 +54,33 @@ async function toolArguments(source?: string): Promise<Record<string, unknown>> 
 async function readJson(file: string): Promise<any | undefined> {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
 }
+async function readJsonSafe(file: string): Promise<{ value?: any; invalid?: boolean }> {
+  try { return { value: await readJson(file) }; } catch { return { invalid: true }; }
+}
 
 async function doctorReport(paths: ReturnType<typeof managedPaths>) {
   const health = await healthManaged(paths);
-  const installation = await readJson(paths.installation);
-  const owner = await readJson(paths.config);
+  const installationState = await readJsonSafe(paths.installation);
+  const ownerState = await readJsonSafe(paths.config);
+  const startupState = await readJsonSafe(join(paths.home, 'startup-error.json'));
   const credential = await readCredential(paths).then(() => 'ok', () => 'unavailable');
-  const startupError = await readJson(join(paths.home, 'startup-error.json'));
-  const autostart = await access(paths.launcher).then(() => 'launcher-present', () => 'launcher-missing');
-  return {
-    health,
-    installation: installation ? { version: installation.version, entrypoint: installation.entrypoint, installedAt: installation.installedAt, pty: installation.pty ?? 'unknown' } : 'missing',
-    enrolledRoots: Array.isArray(owner?.roots) ? owner.roots.length : 0,
-    credential,
-    autostart,
-    startupError: startupError ?? null
-  };
+  let installation: unknown = 'missing';
+  if (installationState.invalid) installation = 'invalid';
+  else if (installationState.value) {
+    const entrypoint = installationState.value.entrypoint;
+    const available = typeof entrypoint === 'string' && await access(entrypoint).then(() => true, () => false);
+    installation = available
+      ? { version: installationState.value.version, entrypoint, installedAt: installationState.value.installedAt, pty: installationState.value.pty ?? 'unknown' }
+      : 'invalid';
+  }
+  const launcher = await access(paths.launcher).then(() => 'present', () => 'missing');
+  const enrolledRoots = ownerState.invalid ? 'invalid' : Array.isArray(ownerState.value?.roots) ? ownerState.value.roots.length : 0;
+  const configurable = !ownerState.invalid && typeof enrolledRoots === 'number' && enrolledRoots > 0;
+  const startupError = startupState.invalid ? 'invalid' : startupState.value ?? null;
+  // A live daemon is not enough: clients and the CLI need the published release,
+  // launcher, credential, and restartable owner configuration after this process exits.
+  const healthy = health.running && typeof installation === 'object' && launcher === 'present' && credential === 'ok' && configurable;
+  return { healthy, health, installation, enrolledRoots, credential, launcher, autostart: await autostartStatus(paths), startupError };
 }
 
 /** Managed commands deliberately derive paths and credentials locally. */
@@ -79,7 +90,14 @@ export async function managedCli(args: string[]): Promise<boolean> {
   if (command === 'setup') { console.log(JSON.stringify(await setupManaged(parseManagedOptions(rest)), null, 2)); return true; }
   if (command === 'enroll') {
     const options = parseManagedOptions(rest[0] && !rest[0].startsWith('--') ? ['--repository', rest[0], ...rest.slice(1)] : rest);
-    console.log(JSON.stringify(await enrollManagedRepository(options.repository ?? process.cwd(), options.home, options.verify), null, 2)); return true;
+    // setup holds this lock while enrolling; standalone enroll needs the same exclusion
+    // so neither can rewrite owner.json or restart the daemon underneath the other.
+    const paths = managedPaths(options.home);
+    await hardenHome(paths);
+    const lock = await acquireSetupLock(join(paths.home, 'setup.lock'));
+    try { console.log(JSON.stringify(await enrollManagedRepository(options.repository ?? process.cwd(), options.home, options.verify), null, 2)); }
+    finally { await lock.release(); }
+    return true;
   }
   const { home, rest: remaining } = takeHome(rest);
   const paths = managedPaths(home);
@@ -97,7 +115,7 @@ export async function managedCli(args: string[]): Promise<boolean> {
   if (command === 'doctor') {
     const report = await doctorReport(paths);
     console.log(JSON.stringify(report, null, 2));
-    if (!report.health.running) process.exitCode = 1;
+    if (!report.healthy) process.exitCode = 1;
   }
   if (command === 'start') console.log(JSON.stringify(await startManaged(paths), null, 2));
   if (command === 'stop') console.log(JSON.stringify(await stopManaged(paths), null, 2));
