@@ -125,7 +125,12 @@ export async function ensureCredential(paths: ManagedPaths): Promise<string> {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
     try { await link(temporary, paths.token); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // Hard links are unavailable on some filesystems; rename is atomic within the
+      // owner-only home and still guarantees that a credential exists after rotation.
+      if (code !== 'EEXIST') await rename(temporary, paths.token);
+    }
   } finally { await unlink(temporary).catch(() => {}); }
   return readCredential(paths);
 }
