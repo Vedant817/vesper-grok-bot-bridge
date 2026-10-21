@@ -4,9 +4,9 @@ import { CodexWorker } from '../src/adapters/codex.js';
 import { ClaudeWorker } from '../src/adapters/claude.js';
 import { resolveExecutable } from '../src/bridge/provider.js';
 import type { RpcMessage, Wire } from '../src/rpc.js';
-import { mkdtemp, mkdir, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { scopedPath } from '../src/adapters/scoped-path.js';
 
 class WireFixture implements Wire {
@@ -111,5 +111,35 @@ describe('portable native sessions', () => {
   });
   it('never executes Windows shell wrappers as native executables', async () => {
     expect(await resolveExecutable('C:/unavailable-bridge-test/unsafe.cmd')).toBeUndefined();
+  });
+  it.runIf(process.platform === 'win32')('resolves an npm-only client to its declared JavaScript entrypoint', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bridge-npm-bin-'));
+    const packageDir = join(root, 'node_modules', '@anthropic-ai', 'claude-code');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-code', bin: { claude: 'cli.js' } }));
+    await writeFile(join(packageDir, 'cli.js'), '');
+    const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA };
+    process.env.PATH = root; process.env.USERPROFILE = root; process.env.APPDATA = join(root, 'appdata');
+    try {
+      expect(await resolveExecutable('claude')).toEqual({ executable: process.execPath, args: [join(packageDir, 'cli.js')] });
+    } finally {
+      process.env.PATH = saved.PATH; process.env.USERPROFILE = saved.USERPROFILE; process.env.APPDATA = saved.APPDATA;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it.runIf(process.platform === 'win32')('rejects a package bin that escapes its own package directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bridge-npm-escape-'));
+    const packageDir = join(root, 'node_modules', '@anthropic-ai', 'claude-code');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@anthropic-ai/claude-code', bin: { claude: '../../../escape.js' } }));
+    await writeFile(join(root, 'escape.js'), '');
+    const saved = { PATH: process.env.PATH, USERPROFILE: process.env.USERPROFILE, APPDATA: process.env.APPDATA };
+    process.env.PATH = root; process.env.USERPROFILE = root; process.env.APPDATA = join(root, 'appdata');
+    try {
+      expect(await resolveExecutable('claude')).toBeUndefined();
+    } finally {
+      process.env.PATH = saved.PATH; process.env.USERPROFILE = saved.USERPROFILE; process.env.APPDATA = saved.APPDATA;
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

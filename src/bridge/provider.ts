@@ -1,6 +1,6 @@
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, extname, isAbsolute, join, resolve } from 'node:path';
+import { delimiter, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -18,6 +18,24 @@ export interface Provider {
 export interface ProviderOverride { executable: string; args?: string[]; models?: string[]; env?: Record<string, string>; protocol?: 'acp' | 'codex' | 'claude' }
 interface Launch { executable: string; args: string[] }
 async function exists(file: string): Promise<boolean> { try { await access(file, process.platform === 'win32' ? constants.F_OK : constants.X_OK); return true; } catch { return false; } }
+const npmPackages: Record<string, string> = { codex: '@openai/codex', claude: '@anthropic-ai/claude-code', opencode: 'opencode-ai' };
+/** npm's Windows shims are .cmd/.ps1; run the package's declared JS bin under node instead. */
+async function npmEntrypoint(name: string): Promise<Launch | undefined> {
+  const packageName = npmPackages[name];
+  if (!packageName) return;
+  const dirs = [...(process.env.PATH ?? process.env.Path ?? '').split(delimiter), process.env.APPDATA ? join(process.env.APPDATA, 'npm') : ''].filter(Boolean);
+  for (const dir of dirs) {
+    const packageDir = resolve(join(dir, 'node_modules', packageName));
+    try {
+      const manifest = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf8'));
+      const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.[name];
+      if (typeof bin !== 'string') continue;
+      const target = resolve(packageDir, bin);
+      if (!target.startsWith(packageDir + sep) || !await exists(target)) continue;
+      return { executable: process.execPath, args: [target] };
+    } catch {}
+  }
+}
 /** Resolve executable files without executing PowerShell/cmd wrappers or interpolating shell text. */
 export async function resolveExecutable(name: string): Promise<Launch | undefined> {
   const windows = process.platform === 'win32';
@@ -34,13 +52,7 @@ export async function resolveExecutable(name: string): Promise<Launch | undefine
     if (windows && !['.exe', '.com'].includes(suffix)) continue;
     return { executable: resolve(candidate), args: [] };
   }
-  if (windows && name === 'codex') {
-    const dirs = [...(process.env.PATH ?? process.env.Path ?? '').split(delimiter), process.env.APPDATA ? join(process.env.APPDATA, 'npm') : ''].filter(Boolean);
-    for (const dir of dirs) {
-      const script = join(dir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
-      if (await exists(script)) return { executable: process.execPath, args: [script] };
-    }
-  }
+  if (windows && !isAbsolute(name)) return npmEntrypoint(name);
   return undefined;
 }
 async function modelsFor(id: string, launch: Launch, env?: Record<string, string>): Promise<string[]> {
