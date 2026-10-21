@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, createConnection } from 'node:net';
-import { lstat, mkdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, rename, rm, rmdir, unlink, writeFile, link } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { z } from 'zod';
@@ -27,18 +27,66 @@ const guardMarker = 'owner.json';
  */
 async function staleGuard(guard: string): Promise<boolean> {
   const marker = join(guard, guardMarker);
-  try {
-    const previous = z.object({ pid: z.number().int().positive() }).passthrough().parse(JSON.parse(await readFile(marker, 'utf8')));
-    if (processAlive(previous.pid)) return false;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      const info = await lstat(guard).catch(() => undefined);
+  let raw: string | undefined;
+  try { raw = await readFile(marker, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  if (raw !== undefined) {
+    try {
+      const previous = z.object({ pid: z.number().int().positive() }).passthrough().parse(JSON.parse(raw));
+      // A live owner is authoritative no matter how old the guard is.
+      if (processAlive(previous.pid)) return false;
+    } catch {
+      // Unparseable markers are judged by age below.
+      const info = await lstat(marker).catch(() => undefined);
       if (!info || Date.now() - info.mtimeMs < 30000) return false;
     }
+  } else {
+    // Only a guard old enough to have been fully written is reclaimable.
+    const info = await lstat(guard).catch(() => undefined);
+    if (!info || Date.now() - info.mtimeMs < 30000) return false;
   }
-  await unlink(marker).catch(() => {});
-  await rmdir(guard).catch(() => {});
-  return true;
+  // Claim the exact guard that was inspected. If a competing startup replaced it in the
+  // meantime, restore it and back off rather than deleting a live acquisition.
+  const claimed = `${guard}.stale.${randomUUID()}`;
+  try { await rename(guard, claimed); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; }
+  const observed = await readFile(join(claimed, guardMarker), 'utf8').catch(() => undefined);
+  if (observed === raw) { await rm(claimed, { recursive: true, force: true }).catch(() => {}); return true; }
+  try { await rename(claimed, guard); }
+  catch { await rm(claimed, { recursive: true, force: true }).catch(() => {}); }
+  return false;
+}
+
+/** Publishing through link() keeps the owner file from being observed half-written. */
+async function claimOwner(owner: string, id: string): Promise<void> {
+  const temporary = `${owner}.${id}.tmp`;
+  await writeFile(temporary, JSON.stringify({ pid: process.pid, id }), { flag: 'wx', mode: 0o600 });
+  try { await link(temporary, owner); }
+  finally { await unlink(temporary).catch(() => {}); }
+}
+
+/** Returns true when the observed owner was reclaimed, false when it changed under us. */
+async function reclaimOwner(owner: string): Promise<boolean> {
+  let raw: string;
+  try { raw = await readFile(owner, 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; }
+  let live = true;
+  try { live = processAlive(z.object({ pid: z.number().int().positive(), id: z.string().uuid() }).parse(JSON.parse(raw)).pid); }
+  catch {
+    // A truncated file from an interrupted write is reclaimable once it is old enough;
+    // a young one may still be mid-write by a competing daemon.
+    const info = await lstat(owner).catch(() => undefined);
+    live = !!info && Date.now() - info.mtimeMs < 30000;
+  }
+  if (live) throw new Error('Managed bridge already has a live owner');
+  const claimed = `${owner}.stale.${randomUUID()}`;
+  try { await rename(owner, claimed); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; }
+  const observed = await readFile(claimed, 'utf8').catch(() => undefined);
+  if (observed === raw) { await unlink(claimed).catch(() => {}); return true; }
+  await link(claimed, owner).catch(() => {});
+  await unlink(claimed).catch(() => {});
+  return false;
 }
 
 async function lease(paths: ManagedPaths): Promise<() => Promise<void>> {
@@ -55,12 +103,14 @@ async function lease(paths: ManagedPaths): Promise<() => Promise<void>> {
     break;
   }
   try {
-    try {
-      const previous = z.object({ pid: z.number().int().positive(), id: z.string().uuid() }).parse(JSON.parse(await readFile(owner, 'utf8')));
-      if (processAlive(previous.pid)) throw new Error('Managed bridge already has a live owner');
-      await unlink(owner);
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-    await writeFile(owner, JSON.stringify({ pid: process.pid, id }), { flag: 'wx', mode: 0o600 });
+    for (let attempt = 0; ; attempt++) {
+      try { await claimOwner(owner, id); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (attempt === 0 && await reclaimOwner(owner)) continue;
+        throw new Error('Managed bridge already has a live owner');
+      }
+    }
   } finally { await unlink(marker).catch(() => {}); await rmdir(guard).catch(() => {}); }
   return async () => { try { if (JSON.parse(await readFile(owner, 'utf8')).id === id) await unlink(owner); } catch {} };
 }
@@ -75,6 +125,19 @@ async function startupError(paths: ManagedPaths, token: string, error: unknown):
 function pipePath(paths: ManagedPaths, instanceId: string): string {
   return controlPipe(paths, instanceId);
 }
+/** Deletes a receipt only if it still names the instance that was observed. */
+async function removeReceiptIf(paths: ManagedPaths, instanceId: string): Promise<void> {
+  const claimed = `${paths.receipt}.delete.${randomUUID()}`;
+  try { await rename(paths.receipt, claimed); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  let current = false;
+  try { const moved = receiptSchema.safeParse(JSON.parse(await readFile(claimed, 'utf8'))); current = moved.success && moved.data.instanceId !== instanceId; }
+  catch { current = false; }
+  // A live daemon may have replaced the stale receipt between the read and this claim.
+  if (current) await link(claimed, paths.receipt).catch(() => {});
+  await unlink(claimed).catch(() => {});
+}
+
 async function receiptAt(paths: ManagedPaths): Promise<ManagedReceipt> {
   const receipt = receiptSchema.parse(JSON.parse(await readFile(paths.receipt, 'utf8')));
   const url = new URL(receipt.url);
@@ -109,7 +172,9 @@ async function control(paths: ManagedPaths, receipt: ManagedReceipt, action: 'st
 export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: Services & { bridge?: { close(): Promise<void> } }): Promise<{ receipt: ManagedReceipt; close(): Promise<void> }> {
   await hardenHome(paths);
   const token = await readCredential(paths), key = await ensureControlKey(paths);
-  const releaseLease = await lease(paths);
+  let releaseLease: () => Promise<void>;
+  try { releaseLease = await lease(paths); }
+  catch (error) { await startupError(paths, token, error); throw error; }
   let services = servicesOverride;
   try {
     if (!services) {
@@ -188,7 +253,7 @@ export async function stopManaged(paths: ManagedPaths): Promise<{ stopped: boole
     // only when the recorded process is provably gone; a live but unresponsive daemon is
     // still an error because terminating it blindly could kill a reused pid.
     if (!processAlive(receipt.pid)) {
-      await unlink(paths.receipt).catch(() => {});
+      await removeReceiptIf(paths, receipt.instanceId).catch(() => {});
       if (process.platform !== 'win32') await unlink(pipePath(paths, receipt.instanceId)).catch(() => {});
       return { stopped: true };
     }
