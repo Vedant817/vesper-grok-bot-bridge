@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { AsyncQueue, type Wire, type RpcMessage } from '../rpc.js';
-import type { Worker, WorkerEvent } from '../contracts.js';
+import { PendingRequestResolvedError, type Worker, type WorkerEvent } from '../contracts.js';
 import { scopedPath } from './scoped-path.js';
 import { Redactor } from '../safety.js';
 
@@ -10,6 +10,7 @@ export class ClaudeWorker implements Worker {
   private wire?: Wire;
   private queue = new AsyncQueue<WorkerEvent>();
   private pending = new Map<string, any>();
+  private resolved = new Set<string>();
   private session?: string;
   private active = false;
   private cancelling = false;
@@ -57,10 +58,10 @@ export class ClaudeWorker implements Worker {
       if (r.tool_name === 'AskUserQuestion') {
         const q = r.input?.questions;
         if (!Array.isArray(q) || q.length !== 1 || typeof q[0].question !== 'string' || q[0].multiSelect) { this.reply(m.request_id, { behavior: 'deny', message: 'Only single questions supported' }); return; }
-        this.pending.set(m.request_id, r);
+        this.resolved.delete(m.request_id); this.pending.set(m.request_id, r);
         this.queue.push({ type: 'question', id: m.request_id, question: q[0].question, options: q[0].options?.map((o: any) => o.label) });
       } else {
-        this.pending.set(m.request_id, r);
+        this.resolved.delete(m.request_id); this.pending.set(m.request_id, r);
         const fileTool = ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(r.tool_name);
         const scoped = fileTool ? scopedPath(this.cwd, r.input?.file_path ?? r.input?.notebook_path) : r.tool_name === 'Bash' && typeof r.input?.command === 'string';
         this.queue.push({ type: 'permission', id: m.request_id, request: { ...(scoped ? { cwd: this.cwd } : {}), command: r.tool_name === 'Bash' ? r.input?.command : undefined, description: JSON.stringify({ tool: r.tool_name, input: r.input, scopeEvidence: scoped ? 'Bound to worktree' : 'Missing or outside-worktree file path' }) } });
@@ -76,10 +77,20 @@ export class ClaudeWorker implements Worker {
     }
   }
   private disconnect(error: Error): void { this.closed = true; this.active = false; this.pending.clear(); this.queue.close(error); }
-  private resolvePending(id: string): void { if (this.pending.delete(id)) this.queue.push({ type: 'pendingResolved', id }); }
+  private rememberResolved(id: string): void {
+    this.resolved.add(id);
+    if (this.resolved.size > 1000) this.resolved.delete(this.resolved.values().next().value!);
+  }
+  private resolvePending(id: string): void { if (this.pending.delete(id)) { this.rememberResolved(id); this.queue.push({ type: 'pendingResolved', id }); } }
   private reply(id: string, response: unknown): void { this.send({ type: 'control_response', response: { subtype: 'success', request_id: id, response } }); }
   async respond(id: string, response: { allow: boolean; answer?: string }): Promise<void> {
-    const r = this.pending.get(id); if (!r) throw new Error('Unknown or already answered request'); this.pending.delete(id);
+    const r = this.pending.get(id);
+    if (!r) {
+      if (this.resolved.has(id)) throw new PendingRequestResolvedError(id);
+      throw new Error('Unknown or already answered request');
+    }
+    if (response.answer !== undefined && typeof response.answer !== 'string') throw new Error('Invalid question answer');
+    this.pending.delete(id); this.rememberResolved(id);
     if (r.tool_name === 'AskUserQuestion' && response.answer !== undefined) this.reply(id, { behavior: 'allow', updatedInput: { ...r.input, answers: { [r.input.questions[0].question]: response.answer } } });
     else this.reply(id, response.allow ? { behavior: 'allow', updatedInput: r.input } : { behavior: 'deny', message: 'Supervisor denied request' });
   }
@@ -90,7 +101,7 @@ export class ClaudeWorker implements Worker {
     this.send({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: this.session ?? this.resumeId ?? '' });
   }
   async cancel(): Promise<void> {
-    if (this.active) {
+    if (this.active && !this.cancelling) {
       this.cancelling = true;
       for (const id of this.pending.keys()) this.resolvePending(id);
       this.send({ type: 'control_request', request_id: randomUUID(), request: { subtype: 'interrupt' } });

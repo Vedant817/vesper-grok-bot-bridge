@@ -51,10 +51,10 @@ export class AcpWorker extends RpcWorker {
   protected request(message: RpcMessage): WorkerEvent | undefined | null {
     const p = message.params as any;
     if (message.method === 'elicitation/create') { this.rpc!.respond(message.id!, { action: 'decline' }); return null; }
-    if (this.cancelling && p?.sessionId === this.session && message.method === '_supervisor/ask_question') { this.rpc!.reject(message.id!, 'Turn cancelled'); return null; }
+    if ((!this.active || this.cancelling) && p?.sessionId === this.session && message.method === '_supervisor/ask_question') { this.rpc!.reject(message.id!, 'Turn inactive or cancelled'); return null; }
     if (message.method === '_supervisor/ask_question' && p?.sessionId === this.session && typeof p.question === 'string') return { type: 'question', id: String(message.id), question: p.question, options: p.options };
     if (message.method === 'session/request_permission' && p?.sessionId === this.session) {
-      if (this.cancelling) { this.rpc!.respond(message.id!, { outcome: { outcome: 'cancelled' } }); return null; }
+      if (!this.active || this.cancelling) { this.rpc!.respond(message.id!, { outcome: { outcome: 'cancelled' } }); return null; }
       const call = p.toolCall, locations = call?.locations;
       const fileMutation = ['edit', 'delete', 'move'].includes(call?.kind);
       const scoped = (!fileMutation || Array.isArray(locations) && locations.length > 0) && (!Array.isArray(locations) || locations.every((l: any) => scopedPath(this.cwd, l.path)));
@@ -68,7 +68,9 @@ export class AcpWorker extends RpcWorker {
     if (message.method === 'session/update' && p?.sessionId === this.session && p.update?.content?.type === 'text') this.queue.push({ type: 'output', text: p.update.content.text });
   }
   async respond(id: string, response: { allow: boolean; answer?: string }): Promise<void> {
-    const message = this.take(id), p = message.params as any;
+    const message = this.take(id, () => {
+      if (response.answer !== undefined && typeof response.answer !== 'string') throw new Error('Invalid question answer');
+    }), p = message.params as any;
     if (message.method === '_supervisor/ask_question') { this.rpc!.respond(message.id!, { answer: response.answer ?? 'Unable to resolve safely' }); return; }
     const option = p.options?.find((o: any) => o.kind === (response.allow ? 'allow_once' : 'reject_once'));
     this.rpc!.respond(message.id!, option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : { outcome: { outcome: 'cancelled' } });

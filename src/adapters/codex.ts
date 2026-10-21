@@ -10,6 +10,7 @@ export class CodexWorker extends RpcWorker {
   private turn?: string;
   private starting = false;
   private cancelling = false;
+  private interruptSent = false;
   private early: RpcMessage[] = [];
   private fileChanges = new Map<string, any[]>();
   private turnError?: unknown;
@@ -33,6 +34,7 @@ export class CodexWorker extends RpcWorker {
     if (this.starting || this.turn) throw new Error('Codex turn already active');
     this.turnError = undefined;
     this.cancelling = false;
+    this.interruptSent = false;
     this.starting = true;
     try {
       const result = await this.rpc!.request('turn/start', { threadId: this.thread, input: [{ type: 'text', text }] });
@@ -89,7 +91,9 @@ export class CodexWorker extends RpcWorker {
     }
   }
   async respond(id: string, response: { allow: boolean; answer?: string }): Promise<void> {
-    const message = this.take(id);
+    const message = this.take(id, () => {
+      if (response.answer !== undefined && typeof response.answer !== 'string') throw new Error('Invalid question answer');
+    });
     if (message.method === 'item/tool/requestUserInput') {
       const q = (message.params as any).questions[0];
       this.rpc!.respond(message.id!, { answers: { [q.id]: { answers: [response.answer ?? 'Unable to resolve safely'] } } });
@@ -97,7 +101,8 @@ export class CodexWorker extends RpcWorker {
   }
   async cancel(): Promise<void> {
     this.cancelling = true;
-    if (this.thread && this.turn) {
+    if (this.thread && this.turn && !this.interruptSent) {
+      this.interruptSent = true;
       this.resolveAllPending();
       await this.rpc?.request('turn/interrupt', { threadId: this.thread, turnId: this.turn });
     }

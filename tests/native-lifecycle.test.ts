@@ -3,6 +3,7 @@ import { AcpWorker } from '../src/adapters/acp.js';
 import { CodexWorker } from '../src/adapters/codex.js';
 import { ClaudeWorker } from '../src/adapters/claude.js';
 import { Rpc, type RpcMessage, type Wire } from '../src/rpc.js';
+import { PendingRequestResolvedError } from '../src/contracts.js';
 
 class TestWire implements Wire {
   messages: any[] = [];
@@ -205,5 +206,118 @@ describe('Claude error results and withdrawn controls', () => {
     await worker.cancel(); expect(await worker.next(signal())).toEqual({ type: 'pendingResolved', id: 'approval' });
     await expect(worker.respond('approval', { allow: true })).rejects.toThrow('Unknown');
     wire.emit(claudePermission('late')); expect(wire.messages.at(-1).response.response.behavior).toBe('deny'); await worker.close();
+  });
+});
+
+describe('native QA lifecycle regressions', () => {
+  it('rejects ACP questions and cancels permissions after end_turn without emitting input or replaying', async () => {
+    const wire = acpWire(), worker = new AcpWorker(async () => wire);
+    await worker.start(process.cwd(), 'task');
+    wire.emit({ id: wire.messages.find(m => m.method === 'session/prompt').id, result: { stopReason: 'end_turn' } });
+    expect((await worker.next(signal())).type).toBe('completed');
+    wire.emit(acpPermission(901));
+    wire.emit({ id: 902, method: '_supervisor/ask_question', params: { sessionId: 'session', question: 'Late?' } });
+    expect(wire.messages.find(m => m.id === 901)?.result).toEqual({ outcome: { outcome: 'cancelled' } });
+    expect(wire.messages.find(m => m.id === 902)?.error).toBeDefined();
+    const abort = new AbortController(), next = worker.next(abort.signal);
+    abort.abort(new Error('no input emitted'));
+    await expect(next).rejects.toThrow('no input emitted');
+    await worker.cancel();
+    expect(wire.messages.filter(m => m.method === 'session/prompt')).toHaveLength(1);
+    await worker.close();
+  });
+
+  it.each(['ACP', 'Codex', 'Claude'] as const)('%s reports withdrawal before the consumer drains pendingResolved and sends no stale answer', async provider => {
+    const wire = provider === 'ACP' ? acpWire() : provider === 'Codex' ? codexWire() : undefined;
+    const setup = provider === 'Claude' ? await claude() : { wire: wire!, worker: provider === 'ACP' ? new AcpWorker(async () => wire!) : new CodexWorker(async () => wire!) };
+    const { worker } = setup, transport = setup.wire;
+    if (provider !== 'Claude') await worker.start(process.cwd(), 'task');
+    transport.emit(provider === 'ACP' ? acpPermission(91) : provider === 'Codex' ? codexPermission(91) : claudePermission('91'));
+    expect((await worker.next(signal())).type).toBe('permission');
+    if (provider === 'ACP') {
+      transport.emit({ id: transport.messages.find(m => m.method === 'session/prompt').id, result: { stopReason: 'end_turn' } });
+      await Promise.resolve();
+    } else if (provider === 'Codex') transport.emit({ method: 'serverRequest/resolved', params: { threadId: 'thread', requestId: 91 } });
+    else transport.emit({ type: 'control_cancel_request', request_id: '91' });
+    const frames = transport.messages.length;
+    await expect(worker.respond('91', { allow: true })).rejects.toMatchObject({ constructor: PendingRequestResolvedError, name: 'PendingRequestResolvedError', requestId: '91' });
+    expect(transport.messages).toHaveLength(frames);
+    expect(await worker.next(signal())).toEqual({ type: 'pendingResolved', id: '91' });
+    const unknown = await worker.respond('never-pending', { allow: true }).catch((error: unknown) => error);
+    expect(unknown).toBeInstanceOf(Error); expect(unknown).not.toBeInstanceOf(PendingRequestResolvedError);
+    expect(transport.closed).toBe(false);
+    await worker.close();
+  });
+
+  it.each(['Codex', 'Claude'] as const)('%s interrupts once until terminal confirmation and does not start a new turn', async provider => {
+    const wire = codexWire();
+    const setup = provider === 'Claude' ? await claude() : { worker: new CodexWorker(async () => wire), wire };
+    const { worker, wire: transport } = setup;
+    if (provider === 'Codex') await worker.start(process.cwd(), 'task');
+    await Promise.all([worker.cancel(), worker.cancel()]); await worker.cancel();
+    const interrupts = () => transport.messages.filter(m => m.method === 'turn/interrupt' || m.type === 'control_request' && m.request.subtype === 'interrupt');
+    expect(interrupts()).toHaveLength(1);
+    await expect(worker.steer('premature')).rejects.toThrow('already active');
+    expect(transport.messages.filter(m => m.method === 'turn/start' || m.type === 'user')).toHaveLength(1);
+    transport.emit(provider === 'Codex' ? { method: 'turn/completed', params: { threadId: 'thread', turn: { id: 'turn', status: 'interrupted' } } } : { type: 'result', subtype: 'success', result: 'cancelled' });
+    await worker.next(signal()); await worker.cancel(); expect(interrupts()).toHaveLength(1);
+    await worker.steer('next intentional turn'); await worker.cancel(); await worker.cancel();
+    expect(interrupts()).toHaveLength(2);
+    await worker.close();
+  });
+
+  it('interrupts exactly once when cancellation races the Codex turn/start response', async () => {
+    const wire = new TestWire(m => ({ initialize: {}, 'thread/start': { thread: { id: 'thread' } }, 'turn/interrupt': {} })[m.method as string]);
+    const worker = new CodexWorker(async () => wire), started = worker.start(process.cwd(), 'task');
+    for (let i = 0; i < 20 && !wire.messages.some(m => m.method === 'turn/start'); i++) await Promise.resolve();
+    const start = wire.messages.find(m => m.method === 'turn/start'); expect(start).toBeDefined();
+    await worker.cancel(); await worker.cancel();
+    expect(wire.messages.filter(m => m.method === 'turn/interrupt')).toHaveLength(0);
+    wire.emit({ id: start.id, result: { turn: { id: 'turn' } } }); await started; await worker.cancel();
+    expect(wire.messages.filter(m => m.method === 'turn/interrupt')).toHaveLength(1);
+    expect(wire.messages.filter(m => m.method === 'turn/start')).toHaveLength(1);
+    await worker.close();
+  });
+
+  it.each(['Codex', 'Claude'] as const)('%s bounds resolved history and never treats an unknown withdrawal as a known request', async provider => {
+    const wire = codexWire();
+    const setup = provider === 'Claude' ? await claude() : { worker: new CodexWorker(async () => wire), wire };
+    const { worker, wire: transport } = setup;
+    if (provider === 'Codex') await worker.start(process.cwd(), 'task');
+    const withdraw = (id: string) => transport.emit(provider === 'Codex' ? { method: 'serverRequest/resolved', params: { threadId: 'thread', requestId: id } } : { type: 'control_cancel_request', request_id: id });
+    withdraw('unknown');
+    const unknown = await worker.respond('unknown', { allow: true }).catch((error: unknown) => error);
+    expect(unknown).toBeInstanceOf(Error); expect(unknown).not.toBeInstanceOf(PendingRequestResolvedError);
+    for (let id = 100; id <= 1100; id++) {
+      transport.emit(provider === 'Codex' ? codexPermission(id) : claudePermission(String(id)));
+      expect((await worker.next(signal())).type).toBe('permission');
+      withdraw(String(id));
+      expect(await worker.next(signal())).toEqual({ type: 'pendingResolved', id: String(id) });
+    }
+    await expect(worker.respond('1100', { allow: true })).rejects.toBeInstanceOf(PendingRequestResolvedError);
+    const evicted = await worker.respond('100', { allow: true }).catch((error: unknown) => error);
+    expect(evicted).toBeInstanceOf(Error); expect(evicted).not.toBeInstanceOf(PendingRequestResolvedError);
+    // A new callback with a reused ID is pending again, regardless of retained history.
+    transport.emit(provider === 'Codex' ? codexPermission(1100) : claudePermission('1100'));
+    expect((await worker.next(signal())).type).toBe('permission');
+    await worker.respond('1100', { allow: false });
+    await worker.close();
+  });
+
+  it.each(['ACP', 'Codex', 'Claude'] as const)('%s retains a question after an invalid answer and permits one valid answer', async provider => {
+    const wire = provider === 'ACP' ? acpWire() : codexWire();
+    const setup = provider === 'Claude' ? await claude() : { worker: provider === 'ACP' ? new AcpWorker(async () => wire) : new CodexWorker(async () => wire), wire };
+    const { worker, wire: transport } = setup;
+    if (provider !== 'Claude') await worker.start(process.cwd(), 'task');
+    transport.emit(provider === 'ACP' ? { id: 91, method: '_supervisor/ask_question', params: { sessionId: 'session', question: 'Language?' } } : provider === 'Codex' ? { id: 91, method: 'item/tool/requestUserInput', params: { threadId: 'thread', turnId: 'turn', questions: [{ id: 'q', question: 'Language?' }] } } : { type: 'control_request', request_id: '91', request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [{ question: 'Language?' }] } } });
+    expect((await worker.next(signal())).type).toBe('question');
+    const frames = transport.messages.length;
+    await expect(worker.respond('91', { allow: true, answer: 42 as unknown as string })).rejects.toThrow('Invalid question answer');
+    expect(transport.messages).toHaveLength(frames);
+    await worker.respond('91', { allow: true, answer: 'TypeScript' });
+    expect(transport.messages).toHaveLength(frames + 1);
+    await expect(worker.respond('91', { allow: true, answer: 'again' })).rejects.toBeInstanceOf(PendingRequestResolvedError);
+    expect(transport.messages).toHaveLength(frames + 1);
+    await worker.close();
   });
 });

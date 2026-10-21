@@ -1,10 +1,11 @@
 import { AsyncQueue, Rpc, type RpcMessage, type Wire } from '../rpc.js';
-import type { Worker, WorkerEvent } from '../contracts.js';
+import { PendingRequestResolvedError, type Worker, type WorkerEvent } from '../contracts.js';
 
 export abstract class RpcWorker implements Worker {
   protected rpc?: Rpc;
   protected queue = new AsyncQueue<WorkerEvent>();
   protected pending = new Map<string, RpcMessage>();
+  private resolved = new Set<string>();
   protected cwd = '';
   protected readonly lifetime = new AbortController();
   private closed = false;
@@ -19,7 +20,7 @@ export abstract class RpcWorker implements Worker {
       if (this.pending.size >= 100) { rpc.reject(message.id!, 'Too many pending requests'); return; }
       const event = this.request(message);
       if (event === null) return;
-      if (event) { this.pending.set(String(message.id), message); this.queue.push(event); }
+      if (event) { this.resolved.delete(String(message.id)); this.pending.set(String(message.id), message); this.queue.push(event); }
       else rpc.reject(message.id!);
     };
     rpc.onNotification = message => this.notification(message);
@@ -33,7 +34,19 @@ export abstract class RpcWorker implements Worker {
   abstract cancel(): Promise<void>;
   next(signal: AbortSignal): Promise<WorkerEvent> { return this.queue.next(signal); }
   async close(): Promise<void> { this.closed = true; this.rpc?.close(); this.lifetime.abort(new Error('Worker closed')); this.pending.clear(); this.queue.close(); }
-  protected resolvePending(id: string): void { if (this.pending.delete(id)) this.queue.push({ type: 'pendingResolved', id }); }
+  private rememberResolved(id: string): void {
+    this.resolved.add(id);
+    if (this.resolved.size > 1000) this.resolved.delete(this.resolved.values().next().value!);
+  }
+  protected resolvePending(id: string): void { if (this.pending.delete(id)) { this.rememberResolved(id); this.queue.push({ type: 'pendingResolved', id }); } }
   protected resolveAllPending(): void { for (const id of this.pending.keys()) this.resolvePending(id); }
-  protected take(id: string): RpcMessage { const message = this.pending.get(id); if (!message) throw new Error('Unknown or already answered request'); this.pending.delete(id); return message; }
+  protected take(id: string, validate: (message: RpcMessage) => void = () => {}): RpcMessage {
+    const message = this.pending.get(id);
+    if (!message) {
+      if (this.resolved.has(id)) throw new PendingRequestResolvedError(id);
+      throw new Error('Unknown or already answered request');
+    }
+    validate(message);
+    this.pending.delete(id); this.rememberResolved(id); return message;
+  }
 }

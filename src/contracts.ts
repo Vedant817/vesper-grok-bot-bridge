@@ -1,4 +1,11 @@
 import type { Permission } from './safety.js';
+/** A previously pending native request was withdrawn or already answered. */
+export class PendingRequestResolvedError extends Error {
+  constructor(readonly requestId: string) {
+    super('Unknown or already answered request: pending request resolved');
+    this.name = 'PendingRequestResolvedError';
+  }
+}
 export type WorkerEvent =
   | { type: 'output'; text: string }
   | { type: 'question'; id: string; question: string; options?: string[]; allowCustomAnswer?: boolean }
