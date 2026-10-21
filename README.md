@@ -17,7 +17,7 @@ grok-agent-bridge setup --repository /absolute/path/to/repo
 grok-agent-bridge doctor
 ```
 
-`setup` accepts `--home`, `--no-clients`, `--no-autostart`, and an explicit `--verify-executable`/`--verify-args`. Every later command accepts `--home`. Setup stages and smoke-tests the release before switching, refuses to harden directories it does not own, reclaims locks left by dead processes, and reports installation, credential, PTY, and autostart status. See [managed installation](docs/BRIDGE.md#managed-installation-recommended) for the security model and recovery behavior.
+`setup` accepts `--home`, `--no-clients`, `--no-autostart`, `--force-setup-lock`, and an explicit `--verify-executable`/`--verify-args`. Every later command accepts `--home`. Setup stages and smoke-tests the release before switching, refuses to harden directories it does not own, reclaims locks left by dead processes, and reports installation, credential, PTY, and autostart status; `doctor` also reports launcher presence and release validity. See [managed installation](docs/BRIDGE.md#managed-installation-recommended) for the security model and recovery behavior.
 
 The older autonomous API-key supervisor remains available below for compatibility.
 
