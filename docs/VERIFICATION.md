@@ -7,6 +7,7 @@
 - Actual default installation at `%LOCALAPPDATA%/GrokAgentBridge` succeeded. Codex, Claude Code and OpenCode have persisted local MCP registrations; existing matching entries were preserved on repeat setup. Provider authentication and hosted model execution remain separate checks.
 - A repeat upgrade retained its previous release on disk. The installed artifact and production dependencies are outside the source checkout. The user PATH entry is persisted.
 - The actual scheduled task was invoked after stopping the installed daemon. A new authenticated daemon instance became healthy; its DPAPI credential was unchanged and `agent_discover` succeeded without manual endpoint or token configuration. This verifies task activation, **not a physical reboot or sign-out/sign-in cycle**.
+- An actual installed stdio client discovered all 11 tools, successfully called `agent_sessions`, survived a daemon stop/start, and called it again through the same proxy connection. Closing the client left the daemon healthy.
 - Grok Bot's own local-execution policy and UI handoff remain unverified. Antigravity still has no built-in control adapter. No universal-provider, OS-sandbox, Linux/macOS autostart or TestSprite certification is claimed.
 
 ## Portable bridge checkpoint: 2026-10-20
