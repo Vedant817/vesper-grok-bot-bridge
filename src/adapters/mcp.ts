@@ -1,12 +1,14 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Redactor } from '../safety.js';
+import { connectEndpoint } from '../connect/security.js';
 
 function preferRequiredVersion(transport: Transport): void {
   const send = transport.send.bind(transport);
@@ -28,7 +30,24 @@ export async function discoverT3(path = join(homedir(), '.t3', 'userdata', 'serv
 }
 export class McpConnection implements ToolCaller {
   private readonly redactor: Redactor;
-  private constructor(readonly client: Client, readonly transportKind: 'http' | 'sse', private readonly transport: StreamableHTTPClientTransport | SSEClientTransport, token: string) { this.redactor = new Redactor([token]); }
+  private constructor(readonly client: Client, readonly transportKind: 'http' | 'sse' | 'stdio', private readonly transport: Transport, token: string) { this.redactor = new Redactor([token]); }
+  /** Supported public Connect resource. No local discovery or legacy SSE downgrade. */
+  static async connectRemote(endpoint: string, token: string, fetchFn: typeof fetch): Promise<McpConnection> {
+    if (!token) throw new Error('MCP bearer token required');
+    const client = new Client({ name: 'grok-agent-bridge', version: '0.1.0' }, { capabilities: {} });
+    const transport = new StreamableHTTPClientTransport(connectEndpoint(endpoint), { requestInit: { headers: { Authorization: `Bearer ${token}` } }, fetch: fetchFn });
+    preferRequiredVersion(transport);
+    try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'http', transport, token); }
+    catch (error) { await client.close().catch(() => {}); throw error; }
+  }
+  /** The official T3 CLI launcher receives authorization only through its child environment. */
+  static async connectStdio(command: string, args: string[], env: Record<string, string>, token: string): Promise<McpConnection> {
+    const client = new Client({ name: 'grok-agent-bridge', version: '0.1.0' }, { capabilities: {} });
+    const transport = new StdioClientTransport({ command, args, env, stderr: 'ignore' });
+    preferRequiredVersion(transport);
+    try { await client.connect(transport, { timeout: 15000 }); return new McpConnection(client, 'stdio', transport, token); }
+    catch (error) { await client.close().catch(() => {}); throw error; }
+  }
   static async connect(endpoint: string, token: string, legacyEndpoint = endpoint): Promise<McpConnection> {
     if (!token) throw new Error('MCP bearer token required');
     const url = loopbackUrl(endpoint), legacy = loopbackUrl(legacyEndpoint);
