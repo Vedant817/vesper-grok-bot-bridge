@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, realpath, readFile, readdir, rename, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, realpath, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
+import { annotatePending, humanQuestionReason, observeSession } from './monitoring.js';
 import type { Worker, WorkerEvent } from '../contracts.js';
 import { classifyPermission, Redactor, RedactedRecords, within } from '../safety.js';
 import { changes, createWorktree, git, verifyWorktree } from '../worktree.js';
@@ -52,7 +53,9 @@ export class BridgeService {
       const snapshot = JSON.parse(await readFile(join(config.stateDirectory, 'sessions', name), 'utf8')) as SessionSnapshot;
       if (snapshot.id + '.json' !== name || !Array.isArray(snapshot.events) || !Array.isArray(snapshot.pending)) throw new Error('Invalid persisted bridge session');
       if (['starting', 'running', 'awaiting_input'].includes(snapshot.status)) { snapshot.status = 'interrupted'; snapshot.pending = []; snapshot.error = 'Bridge restarted; reconnect explicitly with resume. Old approval requests are invalid.'; }
+      snapshot.pending = snapshot.pending.map(annotatePending);
       service.sessions.set(snapshot.id, { snapshot, abort: new AbortController(), tail: Promise.resolve(), records: new RedactedRecords(redactor), received: snapshot.cursor });
+      if (snapshot.status === 'interrupted') await service.persist(service.sessions.get(snapshot.id)!);
     }
     return service;
     } catch (error) { await service.releaseOwner(); throw error; }
@@ -62,7 +65,28 @@ export class BridgeService {
   read(id: string, cursor = 0) {
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('Invalid cursor');
     const s = this.get(id).snapshot;
-    return { ...this.public(s), events: s.events.filter(e => e.cursor > cursor), earliestCursor: s.events[0]?.cursor ?? s.cursor + 1, truncated: cursor < (s.events[0]?.cursor ?? 1) - 1 };
+    return this.clean({ ...s, events: s.events.filter(e => e.cursor > cursor), earliestCursor: s.events[0]?.cursor ?? s.cursor + 1, truncated: cursor < (s.events[0]?.cursor ?? 1) - 1 });
+  }
+  monitor(options: { stallAfterMs?: number } = {}) {
+    const stallAfterMs = options.stallAfterMs ?? this.config.stallAfterMs;
+    if (!Number.isSafeInteger(stallAfterMs) || stallAfterMs < 1 || stallAfterMs > 86400000) throw new Error('Invalid stallAfterMs');
+    return this.clean([...this.sessions.values()].map(l => observeSession(l.snapshot, !!l.worker, stallAfterMs)));
+  }
+  async wait(id: string, afterCursor = 0, timeoutMs = 30000, signal?: AbortSignal) {
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new Error('Invalid timeoutMs');
+    const deadline = performance.now() + Math.min(timeoutMs, 30000);
+    while (true) {
+      signal?.throwIfAborted();
+      const snapshot = this.read(id, afterCursor);
+      if (snapshot.events.length || snapshot.pending.length || !['starting', 'running'].includes(snapshot.status) || this.closed || performance.now() >= deadline) return snapshot;
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
+        const abort = () => { cleanup(); const error = new Error('Wait aborted'); error.name = 'AbortError'; reject(error); };
+        const timer = setTimeout(() => { cleanup(); resolve(); }, Math.min(50, Math.max(0, deadline - performance.now())));
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+    }
   }
   start(input: StartSession): Promise<SessionSnapshot> {
     const operation = this.startTail.then(async () => {
@@ -82,7 +106,7 @@ export class BridgeService {
       const live: Live = { snapshot, abort: new AbortController(), tail: Promise.resolve(), records: new RedactedRecords(this.redactor), received: 0 }; this.sessions.set(snapshot.id, live);
       await this.persist(live);
       try { live.worker = await provider.create({ model: input.model }); await live.worker.start(cwd, input.task); snapshot.nativeId = live.worker.nativeSessionId; snapshot.status = 'running'; await this.persist(live); this.pump(live); }
-      catch (error) { snapshot.status = 'failed'; snapshot.error = this.safeError(error); await live.worker?.close().catch(() => {}); await this.persist(live); }
+      catch (error) { await this.failControl(live, error); }
       return this.public(snapshot);
     });
     this.startTail = operation.catch(() => {}); return operation;
@@ -103,7 +127,7 @@ export class BridgeService {
       await this.validatePaths(snapshot);
       const live: Live = { snapshot, abort: new AbortController(), tail: Promise.resolve(), records: new RedactedRecords(this.redactor), received: 0 }; this.sessions.set(snapshot.id, live); await this.persist(live);
       try { live.worker = provider.create({ model: imported.model, resumeId: imported.nativeId }); await live.worker.start(cwd, task); snapshot.nativeId = live.worker.nativeSessionId ?? imported.nativeId; snapshot.status = 'running'; await this.persist(live); this.pump(live); }
-      catch (error) { snapshot.status = 'failed'; snapshot.error = this.safeError(error); await live.worker?.close().catch(() => {}); await this.persist(live); }
+      catch (error) { await this.failControl(live, error); }
       return this.public(snapshot);
     });
     this.startTail = operation.catch(() => {}); return operation;
@@ -113,6 +137,7 @@ export class BridgeService {
       const s = l.snapshot, pending = s.pending.find(p => p.id === requestId);
       if (!pending || !l.worker || s.status !== 'awaiting_input') throw new Error('No live pending request');
       if (pending.type === 'question') {
+        if (pending.requiresHuman || humanQuestionReason([pending.question, ...(pending.options ?? [])].join('\n'))) throw new Error('Human-only secure input requires the native authentication or consent handoff; an AI caller cannot approve it.');
         bounded(response.answer ?? '', 'answer');
         if (pending.options?.length && !pending.options.includes(response.answer!) && !pending.allowCustomAnswer) throw new Error('Answer must match an offered option');
       } else if (response.allow) {
@@ -120,30 +145,45 @@ export class BridgeService {
         if (permission.cwd) permission.cwd = await realpath(permission.cwd).catch(() => undefined);
         if (classifyPermission(permission, s.worktree).risk === 'blocked') throw new Error('Blocked permission cannot be approved');
       }
-      await l.worker.respond(requestId, { allow: pending.type === 'question' || response.allow === true, answer: response.answer });
-      s.pending = s.pending.filter(p => p.id !== requestId); s.status = s.pending.length ? 'awaiting_input' : 'running'; await this.persist(l); return this.public(s);
+      try { await l.worker.respond(requestId, { allow: pending.type === 'question' || response.allow === true, answer: response.answer }); }
+      catch (error) { await this.failControl(l, error); throw new Error(this.safeError(error)); }
+      s.lastActivityAt = new Date().toISOString(); s.pending = s.pending.filter(p => p.id !== requestId); s.status = s.pending.length ? 'awaiting_input' : 'running'; await this.persist(l); return this.public(s);
     });
   }
   async followup(id: string, task: string) {
     bounded(task, 'task');
-    return this.lock(this.get(id), async l => {
-      if (l.snapshot.status !== 'awaiting_review' || !l.worker) throw new Error('Follow-up requires a completed live turn');
-      if (l.snapshot.turns >= this.config.maxTurns) throw new Error('Turn limit reached');
-      if ((l.snapshot.taskHashes ?? [digest(l.snapshot.task)]).includes(digest(task))) throw new Error('Repeated identical follow-up rejected');
-      await l.worker.steer(task); l.snapshot.task = task; (l.snapshot.taskHashes ??= []).push(digest(task)); l.snapshot.turns++; l.snapshot.evidence = undefined; l.snapshot.status = 'running'; await this.persist(l); return this.public(l.snapshot);
-    });
+    return this.lock(this.get(id), l => this.followupLocked(l, task));
   }
   async resume(id: string, task: string) {
     bounded(task, 'task');
-    return this.lock(this.get(id), async l => {
-      const s = l.snapshot;
-      if (!(s.status === 'interrupted' || (s.status === 'awaiting_review' && !l.worker)) || !s.nativeId) throw new Error('Only disconnected sessions with a native ID can resume');
-      if (s.turns >= this.config.maxTurns) throw new Error('Turn limit reached');
-      await this.validatePaths(s);
-      const worker = await this.provider(s.provider, s.model).create({ model: s.model, resumeId: s.nativeId });
-      try { await worker.start(s.cwd, task); } catch (error) { await worker.close().catch(() => {}); throw error; }
-      l.worker = worker; l.abort = new AbortController(); s.task = task; s.turns++; s.pending = []; s.evidence = undefined; s.status = 'running'; s.nativeId = worker.nativeSessionId ?? s.nativeId; await this.persist(l); this.pump(l); return this.public(s);
-    });
+    return this.lock(this.get(id), l => this.resumeLocked(l, task));
+  }
+  async continueSession(id: string, task: string) {
+    bounded(task, 'task');
+    return this.lock(this.get(id), l => l.snapshot.status === 'awaiting_review' && l.worker ? this.followupLocked(l, task) : this.resumeLocked(l, task));
+  }
+  private async followupLocked(l: Live, task: string) {
+    if (this.closed || l.abort.signal.aborted) throw new Error('Bridge or session is closed');
+    if (l.snapshot.status !== 'awaiting_review' || !l.worker) throw new Error('Follow-up requires a completed live turn');
+    if (l.snapshot.turns >= this.config.maxTurns) throw new Error('Turn limit reached');
+    if ((l.snapshot.taskHashes ?? [digest(l.snapshot.task)]).includes(digest(task))) throw new Error('Repeated identical follow-up rejected');
+    try { await l.worker.steer(task); }
+    catch (error) { await this.failControl(l, error); throw new Error(this.safeError(error)); }
+    l.snapshot.task = task; (l.snapshot.taskHashes ??= []).push(digest(task)); l.snapshot.turns++; l.snapshot.evidence = undefined; l.snapshot.status = 'running'; l.snapshot.lastActivityAt = new Date().toISOString(); await this.persist(l); return this.public(l.snapshot);
+  }
+  private async resumeLocked(l: Live, task: string) {
+    if (this.closed) throw new Error('Bridge is closed');
+    const s = l.snapshot;
+    if (!(s.status === 'interrupted' || (s.status === 'awaiting_review' && !l.worker)) || !s.nativeId) throw new Error('Only disconnected sessions with a native ID can resume');
+    if (s.turns >= this.config.maxTurns) throw new Error('Turn limit reached');
+    await this.validatePaths(s);
+    let worker: Worker;
+    try { worker = await this.provider(s.provider, s.model).create({ model: s.model, resumeId: s.nativeId }); l.worker = worker; await worker.start(s.cwd, task); }
+    catch (error) { await this.failControl(l, error); throw new Error(this.safeError(error)); }
+    l.worker = worker; l.abort = new AbortController(); s.task = task; (s.taskHashes ??= []).push(digest(task)); s.turns++; s.pending = []; s.evidence = undefined; s.error = undefined; s.status = 'running'; s.lastActivityAt = new Date().toISOString(); s.nativeId = worker.nativeSessionId ?? s.nativeId; await this.persist(l); this.pump(l); return this.public(s);
+  }
+  private async failControl(l: Live, error: unknown) {
+    l.snapshot.status = 'failed'; l.snapshot.error = this.safeError(error); l.snapshot.pending = []; l.abort.abort(); await this.stop(l); await this.persist(l);
   }
   async verify(id: string): Promise<Evidence> {
     return this.lock(this.get(id), async l => {
@@ -195,7 +235,7 @@ export class BridgeService {
           const event = await l.worker.next(l.abort.signal);
           await this.lock(l, async () => {
             if (l.abort.signal.aborted || ['failed', 'cancelled', 'finished', 'interrupted'].includes(l.snapshot.status)) return;
-            const s = l.snapshot; s.nativeId = l.worker?.nativeSessionId ?? s.nativeId;
+            const s = l.snapshot; s.lastActivityAt = new Date().toISOString(); s.nativeId = l.worker?.nativeSessionId ?? s.nativeId;
             if (++l.received >= 10000) throw new Error('Session event limit reached');
             if (event.type === 'output') {
               for (const line of l.records.push(event.text)) this.event(l, { type: 'output', text: line });
@@ -204,19 +244,22 @@ export class BridgeService {
             }
             if (event.type === 'completed' || event.type === 'failed') { const finalOutput = l.records.end(); if (finalOutput) this.event(l, { type: 'output', text: finalOutput }); }
             this.event(l, event);
-            if (event.type === 'question' || event.type === 'permission') {
+            if (event.type === 'pendingResolved') {
+              s.pending = s.pending.filter(p => p.id !== event.id);
+              if (s.status === 'awaiting_input' && !s.pending.length) s.status = 'running';
+            } else if (event.type === 'question' || event.type === 'permission') {
               if (s.pending.some(p => p.id === event.id)) throw new Error('Duplicate pending request ID');
               if (s.pending.length >= 50) throw new Error('Pending request limit reached');
-              s.pending.push(this.clean(event)); s.status = 'awaiting_input';
+              s.pending.push(this.clean(annotatePending(event))); s.status = 'awaiting_input';
             } else if (event.type === 'completed') { if (s.pending.length) throw new Error('Worker completed with unresolved input'); s.status = 'awaiting_review'; }
-            else if (event.type === 'failed') { s.status = 'failed'; s.error = this.redactor.redact(event.error); }
+            else if (event.type === 'failed') { s.status = 'failed'; s.error = this.redactor.redact(event.error); s.pending = []; l.abort.abort(); await this.stop(l); }
             await this.persist(l);
           });
         }
       } catch (error) {
         if (!l.abort.signal.aborted) await this.lock(l, async () => {
           if (l.abort.signal.aborted || ['cancelled', 'finished', 'interrupted'].includes(l.snapshot.status)) return;
-          l.snapshot.status = 'failed'; l.snapshot.error = this.safeError(error); l.abort.abort(); await l.worker?.close().catch(() => {}); await this.persist(l);
+          await this.failControl(l, error);
         });
       }
     })();
@@ -236,7 +279,7 @@ export class BridgeService {
     const safe = this.clean(event);
     if (safe.type === 'output') safe.text = safe.text.slice(0, 16000);
     if (safe.type === 'completed') safe.summary = safe.summary.slice(0, 16000);
-    l.snapshot.events.push({ cursor: ++l.snapshot.cursor, event: safe }); l.snapshot.events = l.snapshot.events.slice(-this.config.maxEvents);
+    l.snapshot.events.push({ cursor: ++l.snapshot.cursor, event: safe, timestamp: new Date().toISOString() }); l.snapshot.events = l.snapshot.events.slice(-this.config.maxEvents);
   }
   private async stop(l: Live) {
     const bounded = async (operation: Promise<unknown>): Promise<boolean> => {
@@ -244,8 +287,9 @@ export class BridgeService {
       try { return await Promise.race([operation.then(() => true, () => false), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 2000); })]); }
       finally { if (timer) clearTimeout(timer); }
     };
-    const interrupted = await bounded(Promise.resolve().then(() => l.worker?.cancel()));
-    await bounded(Promise.resolve().then(() => l.worker?.close()));
+    const worker = l.worker; l.worker = undefined;
+    const interrupted = await bounded(Promise.resolve().then(() => worker?.cancel()));
+    await bounded(Promise.resolve().then(() => worker?.close()));
     return interrupted;
   }
   private async fingerprint(s: SessionSnapshot) { return digest(await git(s.worktree, ['rev-parse', 'HEAD']) + '\0' + (await changes(s.worktree)).contentHash); }
@@ -274,5 +318,15 @@ export class BridgeService {
     const owner = JSON.parse(await readFile(path, 'utf8')) as { token: string };
     if (owner.token === this.ownerToken) await unlink(path);
   }
-  private async persist(l: Live) { const target = join(this.config.stateDirectory, 'sessions', l.snapshot.id + '.json'); const temporary = target + '.' + randomUUID() + '.tmp'; await writeFile(temporary, this.redactor.json(l.snapshot), { mode: 0o600 }); await rename(temporary, target); }
+  private async persist(l: Live) {
+    const now = new Date().toISOString();
+    if (l.snapshot.status === 'starting' && !l.snapshot.cursor) { l.snapshot.createdAt ??= now; l.snapshot.lastActivityAt ??= now; }
+    l.snapshot.updatedAt = now;
+    const target = join(this.config.stateDirectory, 'sessions', l.snapshot.id + '.json');
+    const temporary = target + '.' + randomUUID() + '.tmp';
+    const handle = await open(temporary, 'wx', 0o600);
+    try { await handle.writeFile(this.redactor.json(l.snapshot)); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, target);
+  }
 }
