@@ -6,6 +6,19 @@ Start with the [portable bridge setup and Grok Bot instructions](docs/BRIDGE.md)
 
 The worker directory is a runtime argument, constrained by owner-enrolled repositories. Product code contains no required checkout path or dependency on a generated report. Grok Bot's local-command permission or a compatible MCP connection is still required to reach the machine; a cloud Bot cannot reach desktop localhost by installation alone.
 
+## Managed installation
+
+Install the packed CLI once, then let it provision a private home, credentials, MCP client entries, and a restart-safe local daemon:
+
+```sh
+npm pack
+npm install -g ./grok-bot-mcp-agent-0.1.0.tgz
+grok-agent-bridge setup --repository /absolute/path/to/repo
+grok-agent-bridge doctor
+```
+
+`setup` accepts `--home`, `--no-clients`, `--no-autostart`, and an explicit `--verify-executable`/`--verify-args`. Every later command accepts `--home`. Setup stages and smoke-tests the release before switching, refuses to harden directories it does not own, reclaims locks left by dead processes, and reports PTY/client/autostart status. See [managed installation](docs/BRIDGE.md#managed-installation-recommended) for the security model and recovery behavior.
+
 The older autonomous API-key supervisor remains available below for compatibility.
 
 ## Legacy autonomous supervisor

@@ -64,7 +64,7 @@ async function doctorReport(paths: ReturnType<typeof managedPaths>) {
   const autostart = await access(paths.launcher).then(() => 'launcher-present', () => 'launcher-missing');
   return {
     health,
-    installation: installation ? { version: installation.version, entrypoint: installation.entrypoint, installedAt: installation.installedAt } : 'missing',
+    installation: installation ? { version: installation.version, entrypoint: installation.entrypoint, installedAt: installation.installedAt, pty: installation.pty ?? 'unknown' } : 'missing',
     enrolledRoots: Array.isArray(owner?.roots) ? owner.roots.length : 0,
     credential,
     autostart,

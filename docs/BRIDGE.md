@@ -2,7 +2,43 @@
 
 Grok Bot is the supervisor. The bridge exposes native coding sessions as MCP tools. Each request selects a provider, exact model and directory. The bridge does not call an xAI reasoning API and does not use Grok Build as a replacement for the Grok Bot application.
 
-## Install and enroll repositories once
+## Managed installation (recommended)
+
+`setup` creates a per-user installation separate from the checkout, hardens its directory, stores a DPAPI-encrypted bearer token, installs MCP client entries, and starts a restart-safe local daemon.
+
+```sh
+npm pack
+npm install -g ./grok-bot-mcp-agent-0.1.0.tgz
+grok-agent-bridge setup --repository /absolute/path/to/repo
+```
+
+On Windows the default home is `%LOCALAPPDATA%\GrokAgentBridge`; elsewhere it is `${XDG_DATA_HOME:-~/.local/share}/grok-agent-bridge`. Use `--home <folder>` to install elsewhere. Every managed command accepts `--home`, so a custom installation is never silently missed:
+
+```sh
+grok-agent-bridge doctor --home D:/bridge        # JSON report; exit 1 when stopped or broken
+grok-agent-bridge enroll D:/work/project         # add a repository and verifier
+grok-agent-bridge start --home D:/bridge
+grok-agent-bridge call agent_discover --home D:/bridge
+grok-agent-bridge stop --home D:/bridge
+grok-agent-bridge autostart enable|disable
+```
+
+Setup stages a release under `<home>/releases`, installs production dependencies with `npm ci --omit=dev`, import-smoke-tests the staged entrypoint, and only then swaps `installation.json` atomically. A failed or interrupted stage is removed, and a previous release is retained for rollback. Interrupted setup and daemon locks are reclaimed automatically once their process is gone. `doctor` reports the installed version, enrolled root count, credential readability, PTY availability, and the last startup error.
+
+Client registration is conservative: Codex, Claude, and OpenCode are registered only when the bridge entry is absent. An existing entry that points somewhere else is reported as `existing-entry-differs` instead of being overwritten. OpenCode JSONC comments and unrelated providers are preserved.
+
+Autostart uses a hidden VBS trampoline behind a per-installation scheduled task, with the current-user Startup folder as a fallback. It never requests elevation.
+
+Security boundaries:
+
+- The daemon binds only `127.0.0.1` and requires the bearer token at `/mcp` and `/sse`.
+- The control channel authenticates requests and responses with HMAC-SHA256 using `<home>/control.key`. The bearer token is never sent over the named pipe; a stale receipt or squatted pipe name is not a capability.
+- The managed home is owner-only. Setup refuses to strip inheritance from a non-empty directory it does not already own.
+- Tool arguments and provider output remain untrusted; commands and environment values come only from owner configuration.
+
+Known limits: Windows is the only autostart platform, `node-pty` is optional and not built by the staged `npm ci` (the `pty` field in the setup/doctor report records availability), and native executables are preferred over `.cmd`/`.ps1` shims. An npm-only client is resolved through its package's declared JavaScript `bin` entry instead of being executed through a shell. Non-ASCII home paths are preserved end to end: the CLI shim stays ASCII-only and resolves the launcher from its own directory, and the logon script is written as UTF-16LE with a BOM for Windows Script Host. Because the shim cannot embed a non-ASCII Node path, it resolves `node` from `PATH`; the installed launcher and autostart still pin the Node binary recorded at setup.
+
+## Manual installation and enrollment
 
 Requires Node 22+, Git, and the coding CLI you want to use, authenticated through that CLI's supported login. An installation containing only Grok Bot cannot run a missing Codex or Claude executable. Discovery reports missing interfaces; it never installs or substitutes agents automatically.
 
