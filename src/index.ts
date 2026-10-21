@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { runTaskGraph } from './task-graph.js';
 import { bridgeApplication } from './bridge/application.js';
 import { McpConnection } from './adapters/mcp.js';
+import { managedCli } from './managed/cli.js';
 export { BridgeService } from './bridge/service.js';
 export { bridgeApplication } from './bridge/application.js';
 export { discoverProviders } from './bridge/provider.js';
@@ -33,6 +34,7 @@ async function readJson(file: string): Promise<unknown> {
 }
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
+  if (await managedCli(args)) return;
   const [mode, file, ...rest] = args;
   if (mode === 'bridge-call') {
     if (!file || !rest[0] || !rest[0].startsWith('agent_')) throw new Error('Usage: grok-supervisor bridge-call <loopback MCP URL> <agent_tool> <arguments.json>');
@@ -61,7 +63,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.once('SIGINT', stop); process.once('SIGTERM', stop); return;
   }
   if (!mode || mode === '--help') {
-    console.log('Usage: grok-supervisor bridge-stdio <owner.json>\n       grok-supervisor bridge-http <owner.json> [port]\n       grok-supervisor bridge-discover <owner.json>\n       grok-supervisor bridge-call <loopback MCP URL> <agent_tool> [arguments.json]\n\nLegacy autonomous mode: run <config.json> <goal> | run-plan <config.json> <tasks.json>\nLegacy MCP: serve-stdio <config.json> | serve-http <config.json> [port]\n\nBridge: no XAI_API_KEY required. Native agents use their own authentication. HTTP needs MCP_SERVER_TOKEN; T3 needs T3_BEARER_TOKEN. Owner config selects trusted roots and verifier commands.'); return;
+    console.log('Managed installation:\n  grok-agent-bridge setup [--repository <folder>] [--no-clients] [--no-autostart]\n  grok-agent-bridge enroll <folder> [--verify-executable <exe> --verify-args <JSON array>]\n  grok-agent-bridge doctor | start | stop | connect\n  grok-agent-bridge call <agent_tool> [JSON or @arguments.json]\n  grok-agent-bridge autostart enable|disable\n\nAdvanced: bridge-stdio <owner.json> | bridge-http <owner.json> [port]\n          bridge-discover <owner.json> | bridge-call <URL> <agent_tool> [arguments.json]\nLegacy: run <config.json> <goal> | run-plan <config.json> <tasks.json>\n        serve-stdio <config.json> | serve-http <config.json> [port]\n\nNo XAI_API_KEY required for bridge mode. Native agents retain their own authentication.'); return;
   }
   if (!['run', 'run-plan', 'serve-stdio', 'serve-http'].includes(mode) || !file) throw new Error('Invalid command; use --help');
   const config = configSchema.parse(await readJson(file));

@@ -1,0 +1,89 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { execFile } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { managedPaths } from '../src/managed/paths.js';
+import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
+import { healthManaged, runManagedDaemon, stopManaged } from '../src/managed/runtime.js';
+import { createManagedProxy } from '../src/managed/proxy.js';
+import { Redactor } from '../src/safety.js';
+
+const execute = promisify(execFile);
+
+describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 }, () => {
+  let directory: string, paths: ReturnType<typeof managedPaths>, token: string;
+  let daemon: Awaited<ReturnType<typeof runManagedDaemon>> | undefined;
+  beforeAll(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'bridge-managed-runtime-')); paths = managedPaths(directory);
+    token = await ensureCredential(paths);
+  }, 60000);
+  afterAll(async () => { await daemon?.close(); await rm(directory, { recursive: true, force: true }); });
+
+  it('persists a private reusable credential, encrypted with Windows CurrentUser DPAPI', async () => {
+    expect(await readCredential(paths)).toBe(token);
+    expect(await ensureCredential(paths)).toBe(token);
+    if (process.platform === 'win32') {
+      const stored = await readFile(paths.token, 'utf8');
+      expect(stored.startsWith('grok-bridge-dpapi-v1\n')).toBe(true); expect(stored).not.toContain(token);
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('re-hardens the managed home idempotently to owner and SYSTEM only', async () => {
+    await hardenHome(paths); await hardenHome(paths);
+    const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $acl=Get-Acl -LiteralPath $env:BRIDGE_ACL_TARGET; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $sids=@($acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }); [pscustomobject]@{ protected=$acl.AreAccessRulesProtected; owner=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; sid=$sid; sids=$sids } | ConvertTo-Json -Compress`;
+    const { stdout } = await execute(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: { ...process.env, BRIDGE_ACL_TARGET: paths.home }, windowsHide: true });
+    const acl = JSON.parse(stdout.trim()) as { protected: boolean; owner: string; sid: string; sids: string | string[] };
+    expect(acl.protected).toBe(true);
+    expect(acl.owner).toBe(acl.sid);
+    expect([acl.sids].flat().sort()).toEqual([acl.sid, 'S-1-5-18'].sort());
+  });
+
+  it('validates live identity and stops only the authenticated instance', async () => {
+    expect((await healthManaged(paths)).running).toBe(false);
+    daemon = await runManagedDaemon(paths, { repository: directory, redactor: new Redactor() });
+    const receipt = JSON.parse(await readFile(paths.receipt, 'utf8'));
+    expect(receipt).toMatchObject({ pid: process.pid, instanceId: daemon.receipt.instanceId }); expect(JSON.stringify(receipt)).not.toContain(token);
+    expect(await healthManaged(paths)).toMatchObject({ running: true, receipt: daemon.receipt });
+    await writeFile(paths.receipt, JSON.stringify({ ...receipt, instanceId: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa' }));
+    expect((await healthManaged(paths)).running).toBe(false);
+    await expect(stopManaged(paths)).rejects.toThrow('unavailable');
+    await writeFile(paths.receipt, JSON.stringify(receipt));
+    expect((await healthManaged(paths)).running).toBe(true);
+    expect(await stopManaged(paths)).toEqual({ stopped: true });
+    expect((await healthManaged(paths)).running).toBe(false);
+  });
+
+  it('rejects a second daemon without overwriting the live receipt', async () => {
+    daemon = await runManagedDaemon(paths, { repository: directory, redactor: new Redactor() });
+    await expect(runManagedDaemon(paths, { repository: directory, redactor: new Redactor() })).rejects.toThrow('live owner');
+    expect(JSON.parse(await readFile(paths.receipt, 'utf8')).instanceId).toBe(daemon.receipt.instanceId);
+    await daemon.close();
+  });
+
+  it('keeps one MCP client connected across daemon shutdown and fresh daemon startup', async () => {
+    daemon = await runManagedDaemon(paths, { repository: directory, redactor: new Redactor() });
+    const proxy = createManagedProxy(paths), client = new Client({ name: 'managed-proxy-test', version: '1' });
+    const [front, back] = InMemoryTransport.createLinkedPair();
+    await proxy.connect(back); await client.connect(front);
+    try {
+      expect((await client.listTools({}, { timeout: 30000 })).tools.map(tool => tool.name)).toContain('permission_evaluate');
+      const before = daemon.receipt.instanceId;
+      await daemon.close(); daemon = await runManagedDaemon(paths, { repository: directory, redactor: new Redactor() });
+      expect(daemon.receipt.instanceId).not.toBe(before);
+      expect((await client.listTools({}, { timeout: 30000 })).tools.map(tool => tool.name)).toContain('permission_evaluate');
+      await expect(client.callTool({ name: 'permission_evaluate', arguments: { cwd: directory } })).rejects.toThrow('Only coding-agent');
+    } finally { await client.close(); await proxy.close(); await daemon.close(); }
+  });
+
+  it('reports enrollment failures and releases the daemon lease for a corrected restart', async () => {
+    await writeFile(paths.config, JSON.stringify({ roots: [] }));
+    await expect(runManagedDaemon(paths)).rejects.toThrow('Enrollment required');
+    expect(JSON.parse(await readFile(join(paths.home, 'startup-error.json'), 'utf8')).message).toContain('Enrollment required');
+    daemon = await runManagedDaemon(paths, { repository: directory, redactor: new Redactor() });
+    expect((await healthManaged(paths)).running).toBe(true); await daemon.close();
+  });
+});
