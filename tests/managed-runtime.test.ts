@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { execFile } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -85,5 +86,32 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
     expect(JSON.parse(await readFile(join(paths.home, 'startup-error.json'), 'utf8')).message).toContain('Enrollment required');
     daemon = await runManagedDaemon(paths, { repository: directory, redactor: new Redactor() });
     expect((await healthManaged(paths)).running).toBe(true); await daemon.close();
+  });
+
+  it('reclaims an acquisition guard left behind by a process that is gone', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-stale-guard-'));
+    try {
+      const stale = managedPaths(isolated); await ensureCredential(stale);
+      const exited = spawn(process.execPath, ['-e', ''], { windowsHide: true });
+      const deadPid = exited.pid;
+      await new Promise<void>(resolve => exited.on('exit', () => resolve()));
+      if (!deadPid) throw new Error('Spawned helper did not report a pid');
+      const guard = join(stale.home, 'daemon-acquisition');
+      await mkdir(guard); await writeFile(join(guard, 'owner.json'), JSON.stringify({ pid: deadPid, id: randomUUID() }));
+      const recovered = await runManagedDaemon(stale, { repository: isolated, redactor: new Redactor() });
+      await recovered.close();
+      await expect(access(guard)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await rm(isolated, { recursive: true, force: true }); }
+  });
+
+  it('refuses startup while another live process holds the acquisition guard', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-live-guard-'));
+    try {
+      const blocked = managedPaths(isolated); await ensureCredential(blocked);
+      const guard = join(blocked.home, 'daemon-acquisition');
+      await mkdir(guard); await writeFile(join(guard, 'owner.json'), JSON.stringify({ pid: process.pid, id: randomUUID() }));
+      await expect(runManagedDaemon(blocked, { repository: isolated, redactor: new Redactor() })).rejects.toThrow('already in progress');
+      await expect(access(blocked.receipt)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally { await rm(isolated, { recursive: true, force: true }); }
   });
 });

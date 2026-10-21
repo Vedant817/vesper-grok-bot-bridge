@@ -4,6 +4,7 @@ import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ManagedPaths } from './paths.js';
+import { powershellPath } from './powershell.js';
 export { startManaged } from './runtime.js';
 
 const run = promisify(execFile);
@@ -27,7 +28,7 @@ function startupFile(): string {
 export async function installAutostart(paths: ManagedPaths): Promise<{ mode: string; warning?: string }> {
   if (process.platform !== 'win32') return { mode: 'unsupported', warning: 'Automatic logon startup currently supports Windows only' };
   try {
-    await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', startupScript(paths)], { windowsHide: true, timeout: 20000 });
+    await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', startupScript(paths)], { windowsHide: true, timeout: 20000 });
     return { mode: 'scheduled-task' };
   } catch {
     const file = startupFile();
@@ -46,7 +47,7 @@ export async function removeAutostart(paths: ManagedPaths): Promise<void> {
   if (process.platform !== 'win32') return;
   const description = literal(`Managed by GrokAgentBridge: ${paths.home}`);
   let schedulerError: unknown;
-  try { await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -ErrorAction SilentlyContinue; if($task -and $task.Description -eq ${description}){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false}`], { windowsHide: true, timeout: 20000 }); } catch (error) { schedulerError = error; }
+  try { await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -ErrorAction SilentlyContinue; if($task -and $task.Description -eq ${description}){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false}`], { windowsHide: true, timeout: 20000 }); } catch (error) { schedulerError = error; }
   const { readFile } = await import('node:fs/promises');
   const file = startupFile();
   let removedFallback = false;

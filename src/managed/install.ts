@@ -9,6 +9,7 @@ import { ensureCredential, hardenHome } from './credentials.js';
 import { startManaged, stopManaged, healthManaged } from './runtime.js';
 import { installAutostart } from './startup.js';
 import { registerManagedClients } from './clients.js';
+import { powershellPath } from './powershell.js';
 
 const run = promisify(execFile);
 export interface VerifyCommand { executable: string; args: string[] }
@@ -68,7 +69,7 @@ export function launcherSource(home: string): string {
 async function addUserPath(bin: string): Promise<void> {
   if (process.platform !== 'win32') return;
   const value = `'${bin.replace(/'/g, "''")}'`;
-  await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $bin=${value}; $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not (($p -split ';') | Where-Object {$_.TrimEnd('\\') -ieq $bin.TrimEnd('\\')})){[Environment]::SetEnvironmentVariable('Path',(($p.TrimEnd(';')+';'+$bin).TrimStart(';')),'User')}`], { windowsHide: true, timeout: 10000 });
+  await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $bin=${value}; $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not (($p -split ';') | Where-Object {$_.TrimEnd('\\') -ieq $bin.TrimEnd('\\')})){[Environment]::SetEnvironmentVariable('Path',(($p.TrimEnd(';')+';'+$bin).TrimStart(';')),'User')}`], { windowsHide: true, timeout: 10000 });
   const current = process.env.PATH ?? '';
   if (!current.toLowerCase().split(';').includes(bin.toLowerCase())) process.env.PATH = `${current};${bin}`;
 }

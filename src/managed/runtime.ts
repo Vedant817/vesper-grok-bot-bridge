@@ -17,19 +17,54 @@ const receiptSchema = z.object({ url: z.string().url(), pid: z.number().int().po
 export type ManagedReceipt = z.infer<typeof receiptSchema>;
 export type ManagedHealth = { running: true; receipt: ManagedReceipt } | { running: false; reason: string };
 const digest = (value: string) => createHash('sha256').update(value).digest();
+const guardMarker = 'owner.json';
+const processAlive = (pid: number): boolean => {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
+};
+
+/**
+ * An interrupted startup can leave the acquisition directory behind. Reclaim it only
+ * when its marker names a dead process, or when it is old and never got a marker;
+ * a guard that is merely young may belong to a competing startup that is still writing.
+ */
+async function staleGuard(guard: string): Promise<boolean> {
+  const marker = join(guard, guardMarker);
+  try {
+    const previous = z.object({ pid: z.number().int().positive() }).passthrough().parse(JSON.parse(await readFile(marker, 'utf8')));
+    if (processAlive(previous.pid)) return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      const info = await lstat(guard).catch(() => undefined);
+      if (!info || Date.now() - info.mtimeMs < 30000) return false;
+    }
+  }
+  await unlink(marker).catch(() => {});
+  await rmdir(guard).catch(() => {});
+  return true;
+}
+
 async function lease(paths: ManagedPaths): Promise<() => Promise<void>> {
-  const guard = join(paths.home, 'daemon-acquisition'), owner = join(paths.home, 'daemon-owner.json'), id = randomUUID();
-  try { await mkdir(guard, { mode: 0o700 }); } catch { throw new Error('Managed bridge startup is already in progress'); }
+  const guard = join(paths.home, 'daemon-acquisition'), owner = join(paths.home, 'daemon-owner.json'), id = randomUUID(), marker = join(guard, guardMarker);
+  for (let attempt = 0; ; attempt++) {
+    try { await mkdir(guard, { mode: 0o700 }); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (attempt === 0 && await staleGuard(guard)) continue;
+      throw new Error('Managed bridge startup is already in progress');
+    }
+    try { await writeFile(marker, JSON.stringify({ pid: process.pid, id }), { flag: 'wx', mode: 0o600 }); }
+    catch (error) { await rmdir(guard).catch(() => {}); throw error; }
+    break;
+  }
   try {
     try {
       const previous = z.object({ pid: z.number().int().positive(), id: z.string().uuid() }).parse(JSON.parse(await readFile(owner, 'utf8')));
-      let alive = true;
-      try { process.kill(previous.pid, 0); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') alive = false; }
-      if (alive) throw new Error('Managed bridge already has a live owner');
+      if (processAlive(previous.pid)) throw new Error('Managed bridge already has a live owner');
       await unlink(owner);
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     await writeFile(owner, JSON.stringify({ pid: process.pid, id }), { flag: 'wx', mode: 0o600 });
-  } finally { await rmdir(guard); }
+  } finally { await unlink(marker).catch(() => {}); await rmdir(guard).catch(() => {}); }
   return async () => { try { if (JSON.parse(await readFile(owner, 'utf8')).id === id) await unlink(owner); } catch {} };
 }
 

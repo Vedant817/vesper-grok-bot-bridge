@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, link, lstat, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { ManagedPaths } from './paths.js';
+import { powershellPath } from './powershell.js';
 
 // Static scripts receive values through stdin; secrets never enter process arguments.
 // DACL work goes through DirectoryInfo.GetAccessControl/SetAccessControl: Set-Acl with a
@@ -31,8 +31,7 @@ function helperFailure(stderr: string): string {
 
 async function windowsHelper(script: string, input: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', stderr = '', settled = false;
     const failed = (reason?: string) => {
       const detail = helperFailure(stderr);
