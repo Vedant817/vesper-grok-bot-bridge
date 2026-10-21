@@ -120,7 +120,12 @@ async function startupError(paths: ManagedPaths, token: string, error: unknown):
   // never a provider error, config body, raw subprocess output or secret values.
   const message = error instanceof Error && /^(Enrollment required:|Managed bridge already|Managed bridge startup)/.test(error.message)
     ? error.message : 'Managed bridge startup failed; run doctor to check owner enrollment, installation, and credentials';
-  await writeFile(join(paths.home, 'startup-error.json'), JSON.stringify({ at: new Date().toISOString(), message: new Redactor([token]).redact(message) }), { mode: 0o600 }).catch(() => {});
+  const file = join(paths.home, 'startup-error.json'), temporary = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify({ at: new Date().toISOString(), message: new Redactor([token]).redact(message) }), { mode: 0o600 });
+    await rename(temporary, file);
+  } catch { /* Diagnostics are best-effort; a failed start must still surface its original error. */ }
+  finally { await unlink(temporary).catch(() => {}); }
 }
 function pipePath(paths: ManagedPaths, instanceId: string): string {
   return controlPipe(paths, instanceId);
@@ -134,7 +139,15 @@ async function removeReceiptIf(paths: ManagedPaths, instanceId: string): Promise
   try { const moved = receiptSchema.safeParse(JSON.parse(await readFile(claimed, 'utf8'))); current = moved.success && moved.data.instanceId !== instanceId; }
   catch { current = false; }
   // A live daemon may have replaced the stale receipt between the read and this claim.
-  if (current) await link(claimed, paths.receipt).catch(() => {});
+  if (current) {
+    const restored = await link(claimed, paths.receipt).then(() => true, () => false);
+    if (!restored) {
+      // If the name is occupied, a newer receipt is already authoritative. If it is not,
+      // keep the moved file for recovery rather than deleting the only copy.
+      const occupied = await lstat(paths.receipt).then(() => true, () => false);
+      if (!occupied) return;
+    }
+  }
   await unlink(claimed).catch(() => {});
 }
 
@@ -234,12 +247,19 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
   return { receipt, close };
 }
 
+/** Authenticates the control channel only; never needs the bearer credential. */
+export async function daemonStatus(paths: ManagedPaths): Promise<{ running: true; receipt: ManagedReceipt } | { running: false }> {
+  try { return { running: true, receipt: await control(paths, await receiptAt(paths), 'status') }; }
+  catch { return { running: false }; }
+}
+
 export async function healthManaged(paths: ManagedPaths): Promise<ManagedHealth> {
+  const state = await daemonStatus(paths);
+  if (!state.running) return { running: false, reason: 'Managed bridge is stopped, unavailable, or its local identity could not be verified' };
   try {
-    const receipt = await control(paths, await receiptAt(paths), 'status');
-    const connection = await McpConnection.connect(receipt.url + '/mcp', await readCredential(paths));
+    const connection = await McpConnection.connect(state.receipt.url + '/mcp', await readCredential(paths));
     try { await connection.client.listTools({}, { timeout: 5000 }); } finally { await connection.close(); }
-    return { running: true, receipt };
+    return { running: true, receipt: state.receipt };
   } catch { return { running: false, reason: 'Managed bridge is stopped, unavailable, or its local identity could not be verified' }; }
 }
 

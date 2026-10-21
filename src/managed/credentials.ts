@@ -52,6 +52,15 @@ async function windowsHelper(script: string, input: string): Promise<string> {
   });
 }
 
+/** A fresh round-trip distinguishes a corrupt blob from a blocked or timed-out helper. */
+async function dpapiUsable(): Promise<boolean> {
+  const canary = randomBytes(16).toString('hex');
+  try {
+    const protectedValue = await windowsHelper(scripts.protect, encode(canary));
+    return await windowsHelper(scripts.unprotect, encode(protectedValue)) === canary;
+  } catch { return false; }
+}
+
 export async function hardenHome(paths: ManagedPaths): Promise<void> {
   await mkdir(paths.home, { recursive: true, mode: 0o700 });
   const info = await lstat(paths.home);
@@ -81,10 +90,13 @@ export async function readCredential(paths: ManagedPaths): Promise<string> {
     if (!value.startsWith(prefix)) token = '';
     else {
       try { token = await windowsHelper(scripts.unprotect, encode(value.slice(prefix.length))); }
-      // A blob protected under another profile/key, or one damaged by an interrupted write, is
-      // corruption rather than a machine failure. Classify it as invalid so setup can quarantine
-      // and rotate the token instead of wedging forever.
-      catch { throw new Error('Invalid managed credential'); }
+      catch (error) {
+        // A blob protected under another profile/key, or one damaged by an interrupted write, is
+        // corruption rather than a machine failure. Only rotate when DPAPI itself still works;
+        // a blocked, missing, or timed-out helper must leave a known-good credential untouched.
+        if (await dpapiUsable()) throw new Error('Invalid managed credential');
+        throw error;
+      }
     }
   }
   if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid managed credential');
@@ -93,21 +105,25 @@ export async function readCredential(paths: ManagedPaths): Promise<string> {
 
 export async function ensureCredential(paths: ManagedPaths): Promise<string> {
   await hardenHome(paths);
+  let invalid = false;
   try { return await readCredential(paths); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      if (error instanceof Error && /^Invalid managed credential( file)?$/.test(error.message)) {
-        // A corrupt or foreign blob (power loss, copied profile) must not wedge every later
-        // setup. Move it aside so the evidence survives and issue a fresh token.
-        await rename(paths.token, `${paths.token}.invalid-${Date.now()}`).catch(() => {});
-      } else throw error;
+      if (error instanceof Error && /^Invalid managed credential( file)?$/.test(error.message)) invalid = true;
+      else throw error;
     }
   }
+  // Create the replacement before moving the old file aside. If protection fails, a
+  // known-good credential is not left missing just because a later step could not run.
   const token = randomBytes(32).toString('hex');
   const stored = process.platform === 'win32' ? `grok-bridge-dpapi-v1\n${await windowsHelper(scripts.protect, encode(token))}` : token;
   const temporary = paths.token + '.' + randomUUID() + '.tmp';
   try {
     await writeFile(temporary, stored, { flag: 'wx', mode: 0o600 });
+    if (invalid) {
+      try { await rename(paths.token, `${paths.token}.invalid-${Date.now()}`); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    }
     try { await link(temporary, paths.token); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
   } finally { await unlink(temporary).catch(() => {}); }

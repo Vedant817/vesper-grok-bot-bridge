@@ -8,12 +8,13 @@ import { installAutostart, removeAutostart, autostartStatus } from './startup.js
 import { hardenHome, readCredential } from './credentials.js';
 
 export function parseManagedOptions(args: string[]) {
-  const options: { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; verify?: { executable: string; args: string[] } } = {};
+  const options: { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; forceSetupLock?: boolean; verify?: { executable: string; args: string[] } } = {};
   let executable: string | undefined, argv: string[] | undefined;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (flag === '--no-clients') { options.registerClients = false; continue; }
     if (flag === '--no-autostart') { options.autostart = false; continue; }
+    if (flag === '--force-setup-lock') { options.forceSetupLock = true; continue; }
     if (!['--home', '--repository', '--verify-executable', '--verify-args'].includes(flag)) throw new Error(`Unknown setup option: ${flag}`);
     const value = args[++i];
     if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
@@ -67,10 +68,11 @@ async function doctorReport(paths: ReturnType<typeof managedPaths>) {
   let installation: unknown = 'missing';
   if (installationState.invalid) installation = 'invalid';
   else if (installationState.value) {
-    const entrypoint = installationState.value.entrypoint;
-    const available = typeof entrypoint === 'string' && await access(entrypoint).then(() => true, () => false);
-    installation = available
-      ? { version: installationState.value.version, entrypoint, installedAt: installationState.value.installedAt, pty: installationState.value.pty ?? 'unknown' }
+    const entrypoint = installationState.value.entrypoint, node = installationState.value.node;
+    const entrypointPresent = typeof entrypoint === 'string' && await access(entrypoint).then(() => true, () => false);
+    const nodePresent = typeof node === 'string' && await access(node).then(() => true, () => false);
+    installation = entrypointPresent && nodePresent
+      ? { version: installationState.value.version, entrypoint, node, installedAt: installationState.value.installedAt, pty: installationState.value.pty ?? 'unknown' }
       : 'invalid';
   }
   const launcher = await access(paths.launcher).then(() => 'present', () => 'missing');

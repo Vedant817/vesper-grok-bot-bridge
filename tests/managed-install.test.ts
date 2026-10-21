@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os';
 import { parse } from 'jsonc-parser';
 import { managedPaths } from '../src/managed/paths.js';
 import { acquireSetupLock, cliShim, inferVerifier, launcherSource } from '../src/managed/install.js';
-import { daemonVbs, encodeVbs, startupScript, startupTaskName } from '../src/managed/startup.js';
+import { parseManagedOptions } from '../src/managed/cli.js';
+import { daemonVbs, encodeVbs, startupScript, startupTaskName, autostartStatus, removeAutostart } from '../src/managed/startup.js';
 import { mergeOpenCodeConfig } from '../src/managed/clients.js';
 import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
 
@@ -81,15 +82,26 @@ describe('managed installation contracts', () => {
     expect(() => managedPaths(join(tmpdir(), 'semi;colon'))).toThrow('cannot contain');
     expect(() => managedPaths(join(tmpdir(), 'percent%var'))).toThrow('cannot contain');
   });
-  it('reclaims a setup lock whose live pid exceeded the hard age cap', async () => {
+  it('parses the explicit setup-lock recovery flag', () => {
+    expect(parseManagedOptions(['--force-setup-lock']).forceSetupLock).toBe(true);
+    expect(parseManagedOptions([]).forceSetupLock).toBeUndefined();
+  });
+  it('never steals a live setup lock by age, but an explicit force recovers a reused PID', async () => {
     const directory = await temporary(), file = join(directory, 'setup.lock');
     await writeFile(file, JSON.stringify({ pid: process.pid, id: randomUUID(), startedAt: new Date().toISOString() }));
     const old = new Date(Date.now() - 16 * 60 * 1000);
     await utimes(file, old, old);
-    const lock = await acquireSetupLock(file);
+    await expect(acquireSetupLock(file)).rejects.toThrow('--force-setup-lock');
+    const lock = await acquireSetupLock(file, true);
     await lock.release();
     await expect(access(file)).rejects.toMatchObject({ code: 'ENOENT' });
   });
+  it('reports disabled and removes nothing when no autostart entry exists', async () => {
+    if (process.platform !== 'win32') return;
+    const paths = managedPaths(join(await temporary(), 'autostart-empty'));
+    await expect(autostartStatus(paths)).resolves.toBe('disabled');
+    await expect(removeAutostart(paths)).resolves.toEqual({ removed: false });
+  }, 30000);
   it('encodes logon scripts as UTF-16LE so Unicode homes survive WSH decoding', () => {
     const paths = managedPaths(join(tmpdir(), 'José 工具'));
     const encoded = encodeVbs(daemonVbs(paths, 'C:\\Node\\node.exe'));

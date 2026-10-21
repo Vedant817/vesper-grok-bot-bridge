@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { managedPaths } from './paths.js';
 import { ensureCredential, hardenHome } from './credentials.js';
 import { processAlive } from './process.js';
-import { startManaged, stopManaged, healthManaged } from './runtime.js';
+import { startManaged, stopManaged, daemonStatus } from './runtime.js';
 import { installAutostart, removeAutostart } from './startup.js';
 import { registerManagedClients } from './clients.js';
 import { powershellPath } from './powershell.js';
@@ -25,7 +25,7 @@ export function cliShim(): string {
   // Delayed expansion would consume a `!` in the home path before the child sees it.
   return '@echo off\r\nsetlocal DisableDelayedExpansion\r\nnode "%~dp0..\\launcher.cjs" %*\r\n';
 }
-export interface SetupOptions { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; verify?: VerifyCommand }
+export interface SetupOptions { home?: string; repository?: string; registerClients?: boolean; autostart?: boolean; verify?: VerifyCommand; forceSetupLock?: boolean }
 async function readJson(file: string): Promise<any | undefined> {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch (error: any) { if (error.code === 'ENOENT') return; throw error; }
 }
@@ -44,6 +44,18 @@ async function atomicJson(file: string, value: unknown): Promise<void> {
 }
 async function atomicText(file: string, value: string): Promise<void> {
   await atomicWrite(file, value);
+}
+async function readJsonOrQuarantine(file: string): Promise<any | undefined> {
+  try { return await readJson(file); }
+  catch (error) {
+    // Preserve a damaged owner file instead of failing every later setup or silently
+    // overwriting it; a fresh configuration can then be created and re-enrolled.
+    if (error instanceof SyntaxError) {
+      await rename(file, `${file}.invalid-${Date.now()}`).catch(() => {});
+      return undefined;
+    }
+    throw error;
+  }
 }
 export async function npmLaunch(): Promise<VerifyCommand> {
   const candidates = [process.env.npm_execpath, join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'), process.env.APPDATA && join(process.env.APPDATA, 'npm', 'node_modules', 'npm', 'bin', 'npm-cli.js')].filter((s): s is string => !!s);
@@ -77,7 +89,8 @@ export async function enrollManagedRepository(repository: string, home?: string,
   if (existing && (!verify || JSON.stringify(existing.verify) === JSON.stringify(command))) return { directory, enrolled: true };
   if (existing) existing.verify = command;
   else config.roots.push({ directory, verify: command });
-  const wasRunning = restart && (await healthManaged(paths)).running;
+  // A token mismatch must not hide a live daemon from the stop/restart decision.
+  const wasRunning = restart && (await daemonStatus(paths)).running;
   const previousConfig = await readFile(paths.config, 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
   if (wasRunning) await stopManaged(paths);
   try {
@@ -86,8 +99,9 @@ export async function enrollManagedRepository(repository: string, home?: string,
   } catch (error) {
     // A rejected configuration or a failed daemon restart must restore the prior state,
     // including when the config write itself failed and left the old file (or nothing).
+    // Restoration is best-effort so it cannot replace the original failure.
     if (previousConfig === undefined) await unlink(paths.config).catch(() => {});
-    else await atomicText(paths.config, previousConfig);
+    else await atomicText(paths.config, previousConfig).catch(() => {});
     if (wasRunning) await startManaged(paths).catch(() => {});
     throw error;
   }
@@ -106,14 +120,13 @@ async function addUserPath(bin: string): Promise<void> {
   const current = process.env.PATH ?? '';
   if (!current.toLowerCase().split(';').includes(bin.toLowerCase())) process.env.PATH = `${current};${bin}`;
 }
-// A lock that names a live pid is still reclaimed after this age. Pids are reused, and a
-// wedged setup must not disable every future setup forever; real setup work is minutes.
-const setupLockStaleMs = 15 * 60 * 1000;
 /**
- * Reclaim a setup lock only when its owner is provably gone and too old to be mid-write,
- * or when it has exceeded the hard age cap. A young, unparseable file is left alone.
+ * Reclaim a setup lock when its owner is provably gone, when an unparseable file is old
+ * enough to be past a concurrent write, or when the caller explicitly forces recovery
+ * (a replaced PID can otherwise look live forever). A live, parseable owner is never
+ * stolen by age alone: a suspended setup could still resume and race a second one.
  */
-async function staleSetupLock(file: string): Promise<boolean> {
+async function staleSetupLock(file: string, force: boolean): Promise<boolean> {
   let raw: string;
   try { raw = await readFile(file, 'utf8'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error; }
@@ -122,8 +135,10 @@ async function staleSetupLock(file: string): Promise<boolean> {
   catch { owner = undefined; }
   const info = await lstat(file).catch(() => undefined);
   const age = info ? Date.now() - info.mtimeMs : 0;
-  if (owner && processAlive(owner.pid) && age < setupLockStaleMs) return false;
-  if (!owner && age < 30000) return false;
+  if (!force) {
+    if (owner && processAlive(owner.pid)) return false;
+    if (!owner && age < 30000) return false;
+  }
   // Claim exactly the lock that was inspected before deleting it. A concurrent setup may
   // have replaced it between the read and the rename; deleting blindly would let two run.
   const claimed = `${file}.stale.${randomUUID()}`;
@@ -137,15 +152,15 @@ async function staleSetupLock(file: string): Promise<boolean> {
   return false;
 }
 
-export async function acquireSetupLock(file: string): Promise<{ release(): Promise<void> }> {
+export async function acquireSetupLock(file: string, force = false): Promise<{ release(): Promise<void> }> {
   const id = randomUUID();
   for (let attempt = 0; ; attempt++) {
     let handle;
     try { handle = await open(file, 'wx', 0o600); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      if (attempt === 0 && await staleSetupLock(file)) continue;
-      throw new Error(`Another setup is running, or an interrupted setup left ${file}. Wait for the other setup to exit; a lock whose process is gone is reclaimed automatically.`);
+      if (attempt === 0 && await staleSetupLock(file, force)) continue;
+      throw new Error(`Another setup is running, or an interrupted setup left ${file}. Wait for the other setup to exit; a lock whose process is gone is reclaimed automatically. If the recorded PID was reused by an unrelated process, rerun with --force-setup-lock.`);
     }
     try { await handle.writeFile(JSON.stringify({ pid: process.pid, id, startedAt: new Date().toISOString() })); }
     catch (error) { await handle.close().catch(() => {}); await unlink(file).catch(() => {}); throw error; }
@@ -168,21 +183,21 @@ export async function acquireSetupLock(file: string): Promise<{ release(): Promi
 export async function setupManaged(options: SetupOptions = {}): Promise<Record<string, unknown>> {
   const paths = managedPaths(options.home);
   await hardenHome(paths);
-  const lock = await acquireSetupLock(join(paths.home, 'setup.lock'));
+  const lock = await acquireSetupLock(join(paths.home, 'setup.lock'), options.forceSetupLock === true);
   try { return await setupUnlocked(options); }
   finally { await lock.release(); }
 }
 async function setupUnlocked(options: SetupOptions): Promise<Record<string, unknown>> {
   const paths = managedPaths(options.home);
   await hardenHome(paths);
-  await ensureCredential(paths);
   const source = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
   const pkg = await readJson(join(source, 'package.json'));
-  if (!pkg?.name || !await readJson(join(source, 'package.json'))) throw new Error('Installation package metadata unavailable');
+  if (!pkg?.name) throw new Error('Installation package metadata unavailable');
   await access(join(source, 'dist', 'index.js'));
   const stage = join(paths.home, 'releases', `${pkg.version}-${randomUUID()}`);
   const npm = await npmLaunch(), entrypoint = join(stage, 'dist', 'index.js');
-  let lockHash = '';
+  let lockHash = '', activated = false, inspected = false;
+  let previous: any, previousConfig: string | undefined;
   try {
     await mkdir(stage, { recursive: true, mode: 0o700 });
     await cp(join(source, 'dist'), join(stage, 'dist'), { recursive: true, errorOnExist: true, force: false });
@@ -195,52 +210,78 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
     await access(entrypoint);
     // A fully installed package must load before the active installation is replaced.
     await run(process.execPath, ['--input-type=module', '-e', 'await import(process.argv[1])', pathToFileURL(entrypoint).href], { cwd: stage, windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024 });
+    // Only touch owner state after the new release is known to load, so a failed stage
+    // cannot quarantine or replace a working installation.
+    let config = await readJsonOrQuarantine(paths.config);
+    if (config !== undefined && (!config || typeof config !== 'object' || !Array.isArray(config.roots))) {
+      await rename(paths.config, `${paths.config}.invalid-${Date.now()}`).catch(() => {});
+      config = undefined;
+    }
+    if (!config) await atomicJson(paths.config, { stateDirectory: join(paths.home, 'state'), roots: [] });
+    previousConfig = await readFile(paths.config, 'utf8').catch(() => undefined);
+    previous = await readJsonOrQuarantine(paths.installation);
+    inspected = true;
+    let enrollment: unknown;
+    try { enrollment = await enrollManagedRepository(options.repository ?? process.cwd(), paths.home, options.verify, false); } catch (error: any) { enrollment = { enrolled: false, reason: error.message }; }
+    // Stop a daemon that answers the authenticated control channel, even when the bearer
+    // credential no longer matches. Rotating a token while a daemon holds the old one would
+    // otherwise leave a process that cannot be authenticated, stopped, or restarted.
+    if ((await daemonStatus(paths)).running) await stopManaged(paths);
+    await ensureCredential(paths);
+    const pty = await run(process.execPath, ['--input-type=module', '-e', 'const p=await import("node-pty");const t=p.spawn(process.execPath,["-e",""]);t.kill();'], { cwd: stage, windowsHide: true, timeout: 20000 }).then(() => 'available', () => 'unavailable');
+    await writeFile(paths.launcher, launcherSource(paths.home), { mode: 0o600 });
+    await mkdir(paths.bin, { recursive: true, mode: 0o700 });
+    if (process.platform === 'win32') await writeFile(join(paths.bin, 'grok-agent-bridge.cmd'), cliShim(), { mode: 0o600 });
+    else await writeFile(join(paths.bin, 'grok-agent-bridge'), `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${paths.launcher.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o700 });
+    await addUserPath(paths.bin);
+    await writeFile(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md'), 'Use the approved local terminal to run `grok-agent-bridge call agent_discover`. Use `grok-agent-bridge call TOOL_NAME JSON_ARGUMENTS` for bridge operations. Discover provider/model availability, spawn or import the requested session, handle pending inputs, inspect changes, run verification, and finish only after verification passes. Never read or display bridge credentials. The bridge must run on this computer; cloud-only execution cannot reach it.\n', { mode: 0o600 });
+    // Publish the installation only after the launcher and shim exist, so a failure cannot
+    // leave doctor (or a client) pointing at files that were never written.
+    await atomicJson(paths.installation, { entrypoint, node: process.execPath, version: pkg.version, dependencyLockSha256: lockHash, pty, installedAt: new Date().toISOString(), previous: previous ? { entrypoint: previous.entrypoint, node: previous.node, version: previous.version } : undefined });
+    activated = true;
+    const current = await readJson(paths.config), enrolled = current.roots.length > 0;
+    const clients = options.registerClients === false ? { status: 'skipped' } : await registerManagedClients(paths);
+    const startup = options.autostart === false ? { mode: 'disabled' } : enrolled ? await installAutostart(paths) : { mode: 'pending-enrollment' };
+    let health: unknown = { ok: false, reason: 'Repository enrollment with a verifier is required' };
+    if (enrolled) health = await startManaged(paths);
+    // Keep the active release plus the one referenced for rollback; drop abandoned stages.
+    const releases = join(paths.home, 'releases');
+    const keep = new Set([stage, typeof previous?.entrypoint === 'string' ? dirname(previous.entrypoint) : undefined].filter((value): value is string => !!value));
+    for (const entry of await readdir(releases, { withFileTypes: true }).catch(() => [])) {
+      const directory = join(releases, entry.name);
+      if (entry.isDirectory() && !keep.has(directory)) await rm(directory, { recursive: true, force: true }).catch(() => {});
+    }
+    return { home: paths.home, installedEntrypoint: entrypoint, version: pkg.version, enrollment, enrollmentRequired: !enrolled, clients, startup, health };
   } catch (error) {
-    await rm(stage, { recursive: true, force: true }).catch(() => {});
-    throw error;
-  }
-  let enrollment: unknown;
-  if (!await readJson(paths.config)) await atomicJson(paths.config, { stateDirectory: join(paths.home, 'state'), roots: [] });
-  try { enrollment = await enrollManagedRepository(options.repository ?? process.cwd(), paths.home, options.verify, false); } catch (error: any) { enrollment = { enrolled: false, reason: error.message }; }
-  const previous = await readJson(paths.installation);
-  if ((await healthManaged(paths)).running) await stopManaged(paths);
-  const pty = await run(process.execPath, ['--input-type=module', '-e', 'const p=await import("node-pty");const t=p.spawn(process.execPath,["-e",""]);t.kill();'], { cwd: stage, windowsHide: true, timeout: 20000 }).then(() => 'available', () => 'unavailable');
-  let activated = false;
-  try {
-  await writeFile(paths.launcher, launcherSource(paths.home), { mode: 0o600 });
-  await mkdir(paths.bin, { recursive: true, mode: 0o700 });
-  if (process.platform === 'win32') await writeFile(join(paths.bin, 'grok-agent-bridge.cmd'), cliShim(), { mode: 0o600 });
-  else await writeFile(join(paths.bin, 'grok-agent-bridge'), `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${paths.launcher.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o700 });
-  await addUserPath(paths.bin);
-  await writeFile(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md'), 'Use the approved local terminal to run `grok-agent-bridge call agent_discover`. Use `grok-agent-bridge call TOOL_NAME JSON_ARGUMENTS` for bridge operations. Discover provider/model availability, spawn or import the requested session, handle pending inputs, inspect changes, run verification, and finish only after verification passes. Never read or display bridge credentials. The bridge must run on this computer; cloud-only execution cannot reach it.\n', { mode: 0o600 });
-  // Publish the installation only after the launcher and shim exist, so a failure cannot
-  // leave doctor (or a client) pointing at files that were never written.
-  await atomicJson(paths.installation, { entrypoint, node: process.execPath, version: pkg.version, dependencyLockSha256: lockHash, pty, installedAt: new Date().toISOString(), previous: previous ? { entrypoint: previous.entrypoint, node: previous.node, version: previous.version } : undefined });
-  activated = true;
-  const config = await readJson(paths.config), enrolled = config.roots.length > 0;
-  const clients = options.registerClients === false ? { status: 'skipped' } : await registerManagedClients(paths);
-  const startup = options.autostart === false ? { mode: 'disabled' } : enrolled ? await installAutostart(paths) : { mode: 'pending-enrollment' };
-  let health: unknown = { ok: false, reason: 'Repository enrollment with a verifier is required' };
-  if (enrolled) health = await startManaged(paths);
-  // Keep the active release plus the one referenced for rollback; drop abandoned stages.
-  const releases = join(paths.home, 'releases');
-  const keep = new Set([stage, typeof previous?.entrypoint === 'string' ? dirname(previous.entrypoint) : undefined].filter((value): value is string => !!value));
-  for (const entry of await readdir(releases, { withFileTypes: true }).catch(() => [])) {
-    const directory = join(releases, entry.name);
-    if (entry.isDirectory() && !keep.has(directory)) await rm(directory, { recursive: true, force: true }).catch(() => {});
-  }
-  return { home: paths.home, installedEntrypoint: entrypoint, version: pkg.version, enrollment, enrollmentRequired: !enrolled, clients, startup, health };
-  } catch (error) {
-    if (previous) { await stopManaged(paths).catch(() => {}); await atomicJson(paths.installation, previous).catch(() => {}); await startManaged(paths).catch(() => {}); }
-    else if (!activated) {
-      // The first attempt failed before publishing an installation. Remove the partial
-      // launcher, release and instructions; otherwise a later doctor would look healthy.
-      await removeAutostart(paths).catch(() => {});
-      await unlink(paths.installation).catch(() => {});
-      await unlink(paths.launcher).catch(() => {});
-      await rm(paths.bin, { recursive: true, force: true }).catch(() => {});
-      await unlink(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md')).catch(() => {});
+    if (!inspected) {
+      // Staging failed before any owner or installation state was touched.
       await rm(stage, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+    if (activated && previous) {
+      // The new installation was published, then a later step failed. Put the prior
+      // release and enrollment back and restore the daemon before reporting the error.
+      await stopManaged(paths).catch(() => {});
+      await atomicJson(paths.installation, previous).catch(() => {});
+      if (previousConfig !== undefined) await atomicText(paths.config, previousConfig).catch(() => {});
+      await startManaged(paths).catch(() => {});
+      await rm(stage, { recursive: true, force: true }).catch(() => {});
+    } else if (!activated) {
+      await rm(stage, { recursive: true, force: true }).catch(() => {});
+      if (previous) {
+        // A failed attempt may have enrolled a root or stopped the old daemon; restore the
+        // previous configuration and service. Staging failures leave the daemon untouched.
+        if (previousConfig !== undefined) await atomicText(paths.config, previousConfig).catch(() => {});
+        await startManaged(paths).catch(() => {});
+      } else {
+        // First attempt failed before publishing an installation. Remove the partial
+        // launcher, shim and instructions; otherwise a later doctor would look healthy.
+        await removeAutostart(paths).catch(() => {});
+        await unlink(paths.installation).catch(() => {});
+        await unlink(paths.launcher).catch(() => {});
+        await rm(paths.bin, { recursive: true, force: true }).catch(() => {});
+        await unlink(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md')).catch(() => {});
+      }
     }
     throw error;
   }

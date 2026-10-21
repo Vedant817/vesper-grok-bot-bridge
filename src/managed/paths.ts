@@ -9,7 +9,7 @@ export function managedPaths(homeOverride?: string) {
   const base = resolve(home);
   // `%` is expanded again by WScript.Shell.Run and by the user PATH; `;` splits PATH entries.
   // Both would silently corrupt autostart or PATH, so reject them before any state is written.
-  if (process.platform === 'win32' && /[%;]/.test(base)) throw new Error('Managed installation directory cannot contain "%" or ";" on Windows');
+  if (process.platform === 'win32' && /[%;]/.test(base)) throw new Error('Managed installation directory cannot contain "%" or ";" on Windows; choose another folder with --home');
   if (/[\r\n]/.test(base)) throw new Error('Managed installation directory cannot contain line breaks');
   return { home: base, config: join(base, 'owner.json'), token: join(base, 'credential.bin'), receipt: join(base, 'runtime.json'), installation: join(base, 'installation.json'), launcher: join(base, 'launcher.cjs'), bin: join(base, 'bin') };
 }
