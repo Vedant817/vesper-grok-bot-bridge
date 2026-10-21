@@ -1,5 +1,14 @@
 # Verification and remaining acceptance gates
 
+## Managed installation checkpoint: 2026-10-22
+
+- `npm run check`: strict production/test TypeScript checks, **114 tests across 11 files**, and build passed.
+- Independent senior QA reproduced missing-receipt owner bypass and rollback-release deletion, then confirmed both fixes. The final startup-race regression passed independently. Real Windows Script Host testing verifies that daemon exit code 23 reaches the trampoline caller; Windows ACL checks verify owner/SYSTEM access.
+- Actual default installation at `%LOCALAPPDATA%/GrokAgentBridge` succeeded. Codex, Claude Code and OpenCode have persisted local MCP registrations; existing matching entries were preserved on repeat setup. Provider authentication and hosted model execution remain separate checks.
+- A repeat upgrade retained its previous release on disk. The installed artifact and production dependencies are outside the source checkout. The user PATH entry is persisted.
+- The actual scheduled task was invoked after stopping the installed daemon. A new authenticated daemon instance became healthy; its DPAPI credential was unchanged and `agent_discover` succeeded without manual endpoint or token configuration. This verifies task activation, **not a physical reboot or sign-out/sign-in cycle**.
+- Grok Bot's own local-execution policy and UI handoff remain unverified. Antigravity still has no built-in control adapter. No universal-provider, OS-sandbox, Linux/macOS autostart or TestSprite certification is claimed.
+
 ## Portable bridge checkpoint: 2026-10-20
 
 The portable `bridge-*` commands use Grok Bot or another MCP client as the reasoning supervisor and require no xAI API key. This checkpoint is separate from the legacy autonomous supervisor evidence below.

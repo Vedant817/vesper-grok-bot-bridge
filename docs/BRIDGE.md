@@ -6,6 +6,28 @@ Grok Bot is the supervisor. The bridge exposes native coding sessions as MCP too
 
 `setup` creates a per-user installation separate from the checkout, hardens its directory, stores a DPAPI-encrypted bearer token, installs MCP client entries, and starts a restart-safe local daemon.
 
+On a source checkout with Node.js 22+ and Git already installed, the one-time setup can also be run directly:
+
+```sh
+npm ci
+npm run build
+node dist/index.js setup
+```
+
+Run it from the repository you want to enroll, or use `--repository <folder>` once. Setup derives the installation paths and detects the repository's `check` or `test` script. Other projects need an explicit verifier once. Installed coding agents retain their own authentication.
+
+After setup, open a new terminal and restart existing coding-client sessions once to load the saved PATH and MCP entry. Daily use needs no owner-file path, port, bearer token, environment file, or source-checkout location:
+
+```sh
+grok-agent-bridge doctor
+grok-agent-bridge call agent_discover
+grok-agent-bridge call agent_start @task.json
+```
+
+The daemon starts automatically after Windows sign-in and is also started on demand by clients. Each proxy request discovers the current endpoint, so an already-open MCP client can reconnect after the daemon restarts. This does not automatically resume interrupted coding turns: inspect them and use `agent_resume`. The scheduled task runs as the current user without elevation; before-sign-in system-service startup is not provided.
+
+For Grok Bot, enable its approved local execution capability once, then give it the installed `GROK_BOT_INSTRUCTIONS.md` job description. It can use `grok-agent-bridge call ...` through the local terminal without handling bridge credentials. Grok Bot's application approval policy still applies. The installed MCP/CLI route is tested separately from the Grok Bot desktop handoff, which remains unverified.
+
 ```sh
 npm pack
 npm install -g ./grok-bot-mcp-agent-0.1.0.tgz
@@ -24,6 +46,8 @@ grok-agent-bridge autostart enable|disable
 ```
 
 Setup stages a release under `<home>/releases`, installs production dependencies with `npm ci --omit=dev`, import-smoke-tests the staged entrypoint, and only then swaps `installation.json` atomically. A failed or interrupted stage is removed, and a previous release is retained for rollback. Interrupted setup and daemon locks are reclaimed automatically once their process is gone. A setup lock whose recorded PID is still alive is never stolen by age, because a suspended setup can resume; if that PID was reused by an unrelated process, confirm no setup is running and rerun setup with `--force-setup-lock`. Malformed `owner.json` or `installation.json` is quarantined as `*.invalid-<timestamp>` instead of blocking every later run. Credential rotation is staged before the old blob is moved aside, and a daemon that answers the authenticated control channel is stopped before its token is replaced. If the channel cannot be verified while `daemon-owner.json` records a live PID, setup refuses to rotate and names the key or process to recover. `doctor` reports the installed version and release validity, enrolled root count, credential readability, PTY availability, launcher presence, autostart mode, and the last startup error. It exits nonzero when the daemon is stopped or when the published release, launcher, credential, or enrolled owner configuration is missing, malformed, or unreadable.
+
+An absent runtime receipt does not prove that the daemon stopped: setup also checks its owner record. If that record is malformed or unreadable, its age does not authorize replacement. Confirm the daemon is stopped before repairing that record; setup preserves configuration and credentials while identity is uncertain.
 
 Client registration is conservative: Codex, Claude, and OpenCode are registered only when the bridge entry is absent. An existing entry that points somewhere else is reported as `existing-entry-differs` instead of being overwritten. OpenCode JSONC comments and unrelated providers are preserved.
 

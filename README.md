@@ -8,6 +8,15 @@ The worker directory is a runtime argument, constrained by owner-enrolled reposi
 
 ## Managed installation
 
+For this Windows machine, setup can install a persistent per-user bridge, register the installed coding clients, and enable automatic startup after sign-in. Run setup once; daily commands discover the saved paths, credentials and endpoint automatically:
+
+```sh
+grok-agent-bridge doctor
+grok-agent-bridge call agent_discover
+```
+
+Existing terminals and coding clients may need a one-time restart after installation. Grok Bot uses the installed command through approved local execution; its own application permissions remain in force.
+
 Install the packed CLI once, then let it provision a private home, credentials, MCP client entries, and a restart-safe local daemon:
 
 ```sh
