@@ -1,12 +1,14 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { access, mkdtemp, writeFile, readFile, rm, mkdir, utimes } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse } from 'jsonc-parser';
 import { managedPaths } from '../src/managed/paths.js';
-import { acquireSetupLock, cliShim, inferVerifier, launcherSource } from '../src/managed/install.js';
+import { acquireSetupLock, cliShim, enrollManagedRepository, inferVerifier, launcherSource } from '../src/managed/install.js';
+import { git } from '../src/worktree.js';
 import { parseManagedOptions } from '../src/managed/cli.js';
 import { daemonVbs, encodeVbs, startupScript, startupTaskName, autostartStatus, removeAutostart } from '../src/managed/startup.js';
 import { mergeOpenCodeConfig } from '../src/managed/clients.js';
@@ -140,4 +142,27 @@ describe('managed installation contracts', () => {
     await lock.release();
     await expect(access(file)).resolves.toBeUndefined();
   });
+  it.each([
+    { raw: '{truncated', receipt: true }, { raw: '{"pid":"unknown"}', receipt: true },
+    { raw: '{truncated', receipt: false }, { raw: '{"pid":"unknown"}', receipt: false },
+    { raw: JSON.stringify({ pid: process.pid, id: randomUUID() }), receipt: false },
+  ])('preserves enrollment with an unverifiable owner and receipt=$receipt: $raw', async ({ raw, receipt }) => {
+    const home = await temporary(), paths = managedPaths(home);
+    await hardenHome(paths);
+    const repository = await temporary(); await git(repository, ['init']);
+    const previous = JSON.stringify({ stateDirectory: join(home, 'state'), roots: [] });
+    await writeFile(paths.config, previous);
+    if (receipt) await writeFile(paths.receipt, '{unreadable-receipt');
+    const owner = join(home, 'daemon-owner.json'); await writeFile(owner, raw);
+    const old = new Date(Date.now() - 120000); await utimes(owner, old, old);
+    await expect(enrollManagedRepository(repository, home, { executable: process.execPath, args: ['verify.mjs'] })).rejects.toThrow(/owner/);
+    expect(await readFile(paths.config, 'utf8')).toBe(previous);
+    expect(await readFile(owner, 'utf8')).toBe(raw);
+  }, 20000);
+  it.runIf(process.platform === 'win32')('propagates a failed daemon exit through the real Windows logon trampoline', async () => {
+    const home = await temporary(), paths = managedPaths(home), script = join(home, 'daemon.vbs');
+    await writeFile(paths.launcher, 'process.exit(23);');
+    await writeFile(script, encodeVbs(daemonVbs(paths)));
+    await expect(promisify(execFile)(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cscript.exe'), ['//B', '//NoLogo', script], { windowsHide: true, timeout: 15000 })).rejects.toMatchObject({ code: 23 });
+  }, 20000);
 });

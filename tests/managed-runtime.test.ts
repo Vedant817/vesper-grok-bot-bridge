@@ -11,9 +11,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { managedPaths } from '../src/managed/paths.js';
 import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
 import { controlPipe, ensureControlKey } from '../src/managed/control.js';
-import { daemonStatus, healthManaged, runManagedDaemon, stopManaged } from '../src/managed/runtime.js';
+import { daemonStatus, healthManaged, runManagedDaemon, startManaged, stopManaged } from '../src/managed/runtime.js';
 import { createManagedProxy } from '../src/managed/proxy.js';
 import { Redactor } from '../src/safety.js';
+import { powershellEnvironment } from '../src/managed/powershell.js';
 
 const execute = promisify(execFile);
 
@@ -38,7 +39,7 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
   it.runIf(process.platform === 'win32')('re-hardens the managed home idempotently to owner and SYSTEM only', async () => {
     await hardenHome(paths); await hardenHome(paths);
     const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $acl=Get-Acl -LiteralPath $env:BRIDGE_ACL_TARGET; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $sids=@($acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }); [pscustomobject]@{ protected=$acl.AreAccessRulesProtected; owner=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; sid=$sid; sids=$sids } | ConvertTo-Json -Compress`;
-    const { stdout } = await execute(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: { ...process.env, BRIDGE_ACL_TARGET: paths.home }, windowsHide: true });
+    const { stdout } = await execute(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: powershellEnvironment({ BRIDGE_ACL_TARGET: paths.home }), windowsHide: true });
     const acl = JSON.parse(stdout.trim()) as { protected: boolean; owner: string; sid: string; sids: string | string[] };
     expect(acl.protected).toBe(true);
     expect(acl.owner).toBe(acl.sid);
@@ -197,5 +198,28 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
       expect(await readCredential(paths)).toBe(replacement);
       expect((await readdir(isolated)).some(file => file.startsWith('credential.bin.invalid-'))).toBe(true);
     } finally { await rm(isolated, { recursive: true, force: true }); }
+  });
+  it('waits for a competing startup after its own child loses the daemon lease', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-competing-start-')), paths = managedPaths(isolated);
+    let winner: Awaited<ReturnType<typeof runManagedDaemon>> | undefined;
+    let pending: Promise<unknown> | undefined;
+    try {
+      await ensureCredential(paths);
+      await writeFile(paths.config, JSON.stringify({ roots: [{}] }));
+      await writeFile(join(paths.home, 'daemon-owner.json'), JSON.stringify({ pid: process.pid, id: randomUUID() }));
+      await writeFile(paths.launcher, `require('node:fs').writeFileSync(require('node:path').join(process.env.GROK_AGENT_BRIDGE_HOME,'child-exited'),'yes');process.exit(1);`);
+      pending = startManaged(paths);
+      void pending.catch(() => {});
+      // Observe the losing child before publishing the winning daemon's receipt.
+      for (let i = 0; i < 200; i++) {
+        if (await access(join(paths.home, 'child-exited')).then(() => true, () => false)) break;
+        await new Promise(r => setTimeout(r, 25));
+      }
+      await access(join(paths.home, 'child-exited'));
+      await new Promise(r => setTimeout(r, 700));
+      await unlink(join(paths.home, 'daemon-owner.json'));
+      winner = await runManagedDaemon(paths, { repository: isolated, redactor: new Redactor() });
+      await expect(pending).resolves.toMatchObject({ instanceId: winner.receipt.instanceId });
+    } finally { await winner?.close(); await pending?.catch(() => {}); await rm(isolated, { recursive: true, force: true }); }
   });
 });

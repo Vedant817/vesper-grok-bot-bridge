@@ -319,12 +319,13 @@ export async function startManaged(paths: ManagedPaths): Promise<ManagedReceipt>
   if (!Array.isArray(config.roots) || !config.roots.length) throw new Error('Enrollment required: add a trusted repository and verification command with setup');
   if (!(await lstat(paths.launcher)).isFile()) throw new Error('Managed launcher is missing; rerun setup');
   const child = spawn(process.execPath, [paths.launcher, 'daemon'], { detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, GROK_AGENT_BRIDGE_HOME: paths.home } });
-  let launchError = false, exited = false; child.on('error', () => { launchError = true; }); child.on('exit', () => { exited = true; }); child.unref();
+  let launchError = false; child.on('error', () => { launchError = true; }); child.unref();
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline && !launchError) {
     await new Promise(resolve => setTimeout(resolve, 250));
     const state = await healthManaged(paths); if (state.running) return state.receipt;
-    if (exited) break;
+    // A logon task or another client can win startup while this child exits.
+    // Wait for the authenticated winner within the same bounded startup budget.
   }
   throw new Error('Managed bridge could not start; run doctor to inspect enrollment, credentials, and installation');
 }

@@ -11,7 +11,7 @@ import { processAlive } from './process.js';
 import { startManaged, stopManaged, daemonStatus } from './runtime.js';
 import { installAutostart, removeAutostart } from './startup.js';
 import { registerManagedClients } from './clients.js';
-import { powershellPath } from './powershell.js';
+import { powershellEnvironment, powershellPath } from './powershell.js';
 
 const run = promisify(execFile);
 export interface VerifyCommand { executable: string; args: string[] }
@@ -85,10 +85,25 @@ export async function inferVerifier(directory: string, explicit?: VerifyCommand)
  */
 async function assertManageableDaemon(paths: ReturnType<typeof managedPaths>): Promise<'running' | 'stopped'> {
   const status = await daemonStatus(paths);
-  if (status.state !== 'unknown') return status.state;
-  const owner = await readJson(join(paths.home, 'daemon-owner.json')).catch(() => undefined);
-  if (owner && typeof owner.pid === 'number' && processAlive(owner.pid)) {
-    throw new Error(`Managed bridge is running but its control channel cannot be verified (${status.reason}). Restore ${join(paths.home, 'control.key')} or stop the process before retrying.`);
+  if (status.state === 'running') return 'running';
+  const ownerFile = join(paths.home, 'daemon-owner.json');
+  let owner: unknown;
+  try { owner = JSON.parse(await readFile(ownerFile, 'utf8')); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (status.state === 'stopped') return 'stopped';
+      throw new Error(`Managed bridge status is unverifiable (${status.reason}) and its owner record is missing; confirm no bridge process is running before repairing runtime state.`);
+    }
+    // Age cannot prove that an unidentifiable daemon has stopped. A live process
+    // may still use the credential even if its owner record was damaged long ago.
+    throw new Error('Managed bridge owner record is unreadable; confirm no bridge process is running and repair the owner record before retrying.');
+  }
+  const parsed = z.object({ pid: z.number().int().positive(), id: z.string().uuid() }).safeParse(owner);
+  if (parsed.success && processAlive(parsed.data.pid)) {
+    throw new Error(`Managed bridge has a live owner but its control channel cannot be verified. Restore ${join(paths.home, 'control.key')} or stop the process before retrying.`);
+  }
+  if (!parsed.success) {
+    throw new Error('Managed bridge owner record is invalid; confirm no bridge process is running and repair the owner record before retrying.');
   }
   return 'stopped';
 }
@@ -131,7 +146,7 @@ export function launcherSource(home: string): string {
 async function addUserPath(bin: string): Promise<void> {
   if (process.platform !== 'win32') return;
   const value = `'${bin.replace(/'/g, "''")}'`;
-  await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $bin=${value}; $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''}; if(-not (($p -split ';') | Where-Object {$_.TrimEnd('\\') -ieq $bin.TrimEnd('\\')})){[Environment]::SetEnvironmentVariable('Path',(($p.TrimEnd(';')+';'+$bin).TrimStart(';')),'User')}`], { windowsHide: true, timeout: 10000 });
+  await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $bin=${value}; $p=[Environment]::GetEnvironmentVariable('Path','User'); if(-not $p){$p=''}; if(-not (($p -split ';') | Where-Object {$_.TrimEnd('\\') -ieq $bin.TrimEnd('\\')})){[Environment]::SetEnvironmentVariable('Path',(($p.TrimEnd(';')+';'+$bin).TrimStart(';')),'User')}`], { env: powershellEnvironment(), windowsHide: true, timeout: 10000 });
   const current = process.env.PATH ?? '';
   if (!current.toLowerCase().split(';').includes(bin.toLowerCase())) process.env.PATH = `${current};${bin}`;
 }
@@ -267,7 +282,7 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
     if (enrolled) health = await startManaged(paths);
     // Keep the active release plus the one referenced for rollback; drop abandoned stages.
     const releases = join(paths.home, 'releases');
-    const keep = new Set([stage, typeof previous?.entrypoint === 'string' ? dirname(previous.entrypoint) : undefined].filter((value): value is string => !!value));
+    const keep = new Set([stage, typeof previous?.entrypoint === 'string' ? dirname(dirname(previous.entrypoint)) : undefined].filter((value): value is string => !!value));
     for (const entry of await readdir(releases, { withFileTypes: true }).catch(() => [])) {
       const directory = join(releases, entry.name);
       if (!entry.isDirectory() || keep.has(directory)) continue;

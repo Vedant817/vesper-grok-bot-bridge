@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, link, lstat, mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ManagedPaths } from './paths.js';
-import { powershellPath } from './powershell.js';
+import { powershellEnvironment, powershellPath } from './powershell.js';
 
 // Static scripts receive values through stdin; secrets never enter process arguments.
 // stdin is base64 so Windows PowerShell's OEM code-page decoding cannot mangle paths.
@@ -35,7 +35,7 @@ function helperFailure(stderr: string): string {
 
 async function windowsHelper(script: string, input: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: powershellEnvironment(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', stderr = '', settled = false;
     const failed = (reason?: string) => {
       const detail = helperFailure(stderr);
