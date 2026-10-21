@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFile, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, readdir, rm, unlink, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { managedPaths } from '../src/managed/paths.js';
 import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
 import { controlPipe, ensureControlKey } from '../src/managed/control.js';
-import { healthManaged, runManagedDaemon, stopManaged } from '../src/managed/runtime.js';
+import { daemonStatus, healthManaged, runManagedDaemon, stopManaged } from '../src/managed/runtime.js';
 import { createManagedProxy } from '../src/managed/proxy.js';
 import { Redactor } from '../src/safety.js';
 
@@ -58,6 +58,25 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
     expect((await healthManaged(paths)).running).toBe(true);
     expect(await stopManaged(paths)).toEqual({ stopped: true });
     expect((await healthManaged(paths)).running).toBe(false);
+  });
+
+  it('distinguishes an unverifiable live daemon from a stopped one', async () => {
+    const isolated = await mkdtemp(join(tmpdir(), 'bridge-control-loss-'));
+    try {
+      const lost = managedPaths(isolated);
+      await ensureCredential(lost);
+      expect(await daemonStatus(lost)).toEqual({ state: 'stopped' });
+      const running = await runManagedDaemon(lost, { repository: isolated, redactor: new Redactor() });
+      try {
+        // The daemon captures the control key at startup. Recreating the deleted file
+        // yields a different key, so the channel cannot authenticate even though the
+        // process and its receipt are still valid.
+        await unlink(join(lost.home, 'control.key'));
+        expect(await daemonStatus(lost)).toMatchObject({ state: 'unknown' });
+        const owner = JSON.parse(await readFile(join(lost.home, 'daemon-owner.json'), 'utf8'));
+        expect(owner.pid).toBe(process.pid);
+      } finally { await running.close(); }
+    } finally { await rm(isolated, { recursive: true, force: true }); }
   });
 
   it('rejects a second daemon without overwriting the live receipt', async () => {

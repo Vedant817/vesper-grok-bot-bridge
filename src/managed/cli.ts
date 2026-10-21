@@ -1,4 +1,4 @@
-import { access, readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { managedPaths } from './paths.js';
@@ -56,7 +56,11 @@ async function readJson(file: string): Promise<any | undefined> {
   try { return JSON.parse(await readFile(file, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
 }
 async function readJsonSafe(file: string): Promise<{ value?: any; invalid?: boolean }> {
-  try { return { value: await readJson(file) }; } catch { return { invalid: true }; }
+  try {
+    const value = await readJson(file);
+    // A JSON `null` is not a missing file and cannot be a valid owner/installation record.
+    return value === null ? { invalid: true } : { value };
+  } catch { return { invalid: true }; }
 }
 
 async function doctorReport(paths: ReturnType<typeof managedPaths>) {
@@ -69,13 +73,13 @@ async function doctorReport(paths: ReturnType<typeof managedPaths>) {
   if (installationState.invalid) installation = 'invalid';
   else if (installationState.value) {
     const entrypoint = installationState.value.entrypoint, node = installationState.value.node;
-    const entrypointPresent = typeof entrypoint === 'string' && await access(entrypoint).then(() => true, () => false);
-    const nodePresent = typeof node === 'string' && await access(node).then(() => true, () => false);
+    const entrypointPresent = typeof entrypoint === 'string' && await stat(entrypoint).then(info => info.isFile(), () => false);
+    const nodePresent = typeof node === 'string' && await stat(node).then(info => info.isFile(), () => false);
     installation = entrypointPresent && nodePresent
       ? { version: installationState.value.version, entrypoint, node, installedAt: installationState.value.installedAt, pty: installationState.value.pty ?? 'unknown' }
       : 'invalid';
   }
-  const launcher = await access(paths.launcher).then(() => 'present', () => 'missing');
+  const launcher = await stat(paths.launcher).then(info => info.isFile() ? 'present' : 'invalid', () => 'missing');
   const enrolledRoots = ownerState.invalid ? 'invalid' : Array.isArray(ownerState.value?.roots) ? ownerState.value.roots.length : 0;
   const configurable = !ownerState.invalid && typeof enrolledRoots === 'number' && enrolledRoots > 0;
   const startupError = startupState.invalid ? 'invalid' : startupState.value ?? null;
@@ -96,7 +100,7 @@ export async function managedCli(args: string[]): Promise<boolean> {
     // so neither can rewrite owner.json or restart the daemon underneath the other.
     const paths = managedPaths(options.home);
     await hardenHome(paths);
-    const lock = await acquireSetupLock(join(paths.home, 'setup.lock'));
+    const lock = await acquireSetupLock(join(paths.home, 'setup.lock'), options.forceSetupLock === true);
     try { console.log(JSON.stringify(await enrollManagedRepository(options.repository ?? process.cwd(), options.home, options.verify), null, 2)); }
     finally { await lock.release(); }
     return true;

@@ -177,7 +177,7 @@ async function control(paths: ManagedPaths, receipt: ManagedReceipt, action: 'st
     socket.setTimeout(3000, () => finish(new Error('Managed runtime is unresponsive')));
     socket.setEncoding('utf8'); socket.on('connect', () => socket.write(request + '\n'));
     socket.on('data', (chunk: string) => { output += chunk; if (output.length > 8192) finish(new Error('Invalid managed runtime response')); else if (output.includes('\n')) finish(); });
-    socket.on('error', () => finish(new Error('Managed runtime is unavailable'))); socket.on('end', () => finish(new Error('Managed runtime did not respond')));
+    socket.on('error', (error: NodeJS.ErrnoException) => finish(Object.assign(new Error('Managed runtime is unavailable'), { code: error.code }))); socket.on('end', () => finish(new Error('Managed runtime did not respond')));
   });
 }
 
@@ -247,15 +247,40 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
   return { receipt, close };
 }
 
-/** Authenticates the control channel only; never needs the bearer credential. */
-export async function daemonStatus(paths: ManagedPaths): Promise<{ running: true; receipt: ManagedReceipt } | { running: false }> {
-  try { return { running: true, receipt: await control(paths, await receiptAt(paths), 'status') }; }
-  catch { return { running: false }; }
+/**
+ * Authenticates the control channel only; never needs the bearer credential.
+ * `unknown` means a live daemon cannot be ruled out (unreadable receipt, rotated or
+ * missing control key, timeout). Callers must not treat it as stopped when they are
+ * about to rotate credentials or rewrite owner state.
+ */
+export type DaemonStatus = { state: 'running'; receipt: ManagedReceipt } | { state: 'stopped' } | { state: 'unknown'; reason: string };
+export async function daemonStatus(paths: ManagedPaths): Promise<DaemonStatus> {
+  let receipt: ManagedReceipt;
+  try { receipt = await receiptAt(paths); }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ? { state: 'stopped' }
+      : { state: 'unknown', reason: 'runtime receipt is unreadable' };
+  }
+  try { return { state: 'running', receipt: await control(paths, receipt, 'status') }; }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // A missing pipe or a refused connection is only proof of "stopped" when the
+    // recorded process is also gone. A live PID may be a daemon whose receipt was
+    // replaced, or a reused PID; either way callers must not rotate underneath it.
+    if (code === 'ENOENT' || code === 'ECONNREFUSED') {
+      return processAlive(receipt.pid)
+        ? { state: 'unknown', reason: 'no control listener is reachable for the recorded live process' }
+        : { state: 'stopped' };
+    }
+    // Any other failure could be a live daemon we cannot authenticate (for example after key loss).
+    return { state: 'unknown', reason: (error as Error).message || 'control channel could not be verified' };
+  }
 }
 
 export async function healthManaged(paths: ManagedPaths): Promise<ManagedHealth> {
   const state = await daemonStatus(paths);
-  if (!state.running) return { running: false, reason: 'Managed bridge is stopped, unavailable, or its local identity could not be verified' };
+  if (state.state !== 'running') return { running: false, reason: state.state === 'unknown' ? `Managed bridge could not be verified: ${state.reason}` : 'Managed bridge is stopped, unavailable, or its local identity could not be verified' };
   try {
     const connection = await McpConnection.connect(state.receipt.url + '/mcp', await readCredential(paths));
     try { await connection.client.listTools({}, { timeout: 5000 }); } finally { await connection.close(); }

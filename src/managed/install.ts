@@ -78,19 +78,34 @@ export async function inferVerifier(directory: string, explicit?: VerifyCommand)
   const npm = await npmLaunch();
   return { executable: npm.executable, args: [...npm.args, 'run', script] };
 }
+/**
+ * A token mismatch must not hide a live daemon, and an unverifiable channel is not
+ * "stopped": a daemon may still hold a live owner PID. Setup and enrollment must not
+ * rotate credentials or rewrite owner state underneath it.
+ */
+async function assertManageableDaemon(paths: ReturnType<typeof managedPaths>): Promise<'running' | 'stopped'> {
+  const status = await daemonStatus(paths);
+  if (status.state !== 'unknown') return status.state;
+  const owner = await readJson(join(paths.home, 'daemon-owner.json')).catch(() => undefined);
+  if (owner && typeof owner.pid === 'number' && processAlive(owner.pid)) {
+    throw new Error(`Managed bridge is running but its control channel cannot be verified (${status.reason}). Restore ${join(paths.home, 'control.key')} or stop the process before retrying.`);
+  }
+  return 'stopped';
+}
 export async function enrollManagedRepository(repository: string, home?: string, verify?: VerifyCommand, restart = true): Promise<{ directory: string; enrolled: boolean; reason?: string }> {
   const paths = managedPaths(home);
   await hardenHome(paths);
   const directory = await repositoryRoot(repository), command = await inferVerifier(directory, verify);
   if (!command) return { directory, enrolled: false, reason: 'No verification script found. Enroll with an explicit verifier executable and arguments.' };
-  const config = await readJson(paths.config) ?? { stateDirectory: join(paths.home, 'state'), roots: [] };
+  const config = await readJsonOrQuarantine(paths.config) ?? { stateDirectory: join(paths.home, 'state'), roots: [] };
   if (!Array.isArray(config.roots)) throw new Error('Existing owner configuration has invalid roots; it was preserved');
   const existing = config.roots.find((root: any) => resolve(root.directory) === directory);
   if (existing && (!verify || JSON.stringify(existing.verify) === JSON.stringify(command))) return { directory, enrolled: true };
   if (existing) existing.verify = command;
   else config.roots.push({ directory, verify: command });
   // A token mismatch must not hide a live daemon from the stop/restart decision.
-  const wasRunning = restart && (await daemonStatus(paths)).running;
+  const daemon = await assertManageableDaemon(paths);
+  const wasRunning = restart && daemon === 'running';
   const previousConfig = await readFile(paths.config, 'utf8').catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error; });
   if (wasRunning) await stopManaged(paths);
   try {
@@ -195,8 +210,9 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
   if (!pkg?.name) throw new Error('Installation package metadata unavailable');
   await access(join(source, 'dist', 'index.js'));
   const stage = join(paths.home, 'releases', `${pkg.version}-${randomUUID()}`);
+  const startedAt = Date.now();
   const npm = await npmLaunch(), entrypoint = join(stage, 'dist', 'index.js');
-  let lockHash = '', activated = false, inspected = false;
+  let lockHash = '', activated = false, inspected = false, unmanageable = false;
   let previous: any, previousConfig: string | undefined;
   try {
     await mkdir(stage, { recursive: true, mode: 0o700 });
@@ -220,16 +236,21 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
     if (!config) await atomicJson(paths.config, { stateDirectory: join(paths.home, 'state'), roots: [] });
     previousConfig = await readFile(paths.config, 'utf8').catch(() => undefined);
     previous = await readJsonOrQuarantine(paths.installation);
+    if (previous !== undefined && (!previous || typeof previous !== 'object' || Array.isArray(previous) || typeof previous.entrypoint !== 'string')) {
+      await rename(paths.installation, `${paths.installation}.invalid-${Date.now()}`).catch(() => {});
+      previous = undefined;
+    }
     inspected = true;
     let enrollment: unknown;
     try { enrollment = await enrollManagedRepository(options.repository ?? process.cwd(), paths.home, options.verify, false); } catch (error: any) { enrollment = { enrolled: false, reason: error.message }; }
     // Stop a daemon that answers the authenticated control channel, even when the bearer
     // credential no longer matches. Rotating a token while a daemon holds the old one would
     // otherwise leave a process that cannot be authenticated, stopped, or restarted.
-    if ((await daemonStatus(paths)).running) await stopManaged(paths);
+    const daemon = await assertManageableDaemon(paths).catch((error: unknown) => { unmanageable = true; throw error; });
+    if (daemon === 'running') await stopManaged(paths);
     await ensureCredential(paths);
     const pty = await run(process.execPath, ['--input-type=module', '-e', 'const p=await import("node-pty");const t=p.spawn(process.execPath,["-e",""]);t.kill();'], { cwd: stage, windowsHide: true, timeout: 20000 }).then(() => 'available', () => 'unavailable');
-    await writeFile(paths.launcher, launcherSource(paths.home), { mode: 0o600 });
+    await atomicWrite(paths.launcher, launcherSource(paths.home));
     await mkdir(paths.bin, { recursive: true, mode: 0o700 });
     if (process.platform === 'win32') await writeFile(join(paths.bin, 'grok-agent-bridge.cmd'), cliShim(), { mode: 0o600 });
     else await writeFile(join(paths.bin, 'grok-agent-bridge'), `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${paths.launcher.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o700 });
@@ -249,13 +270,20 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
     const keep = new Set([stage, typeof previous?.entrypoint === 'string' ? dirname(previous.entrypoint) : undefined].filter((value): value is string => !!value));
     for (const entry of await readdir(releases, { withFileTypes: true }).catch(() => [])) {
       const directory = join(releases, entry.name);
-      if (entry.isDirectory() && !keep.has(directory)) await rm(directory, { recursive: true, force: true }).catch(() => {});
+      if (!entry.isDirectory() || keep.has(directory)) continue;
+      // A forced setup can overlap another run. Never delete a stage created after this
+      // run started; only older abandoned stages are safe to prune.
+      const info = await lstat(directory).catch(() => undefined);
+      if (info && info.mtimeMs < startedAt) await rm(directory, { recursive: true, force: true }).catch(() => {});
     }
     return { home: paths.home, installedEntrypoint: entrypoint, version: pkg.version, enrollment, enrollmentRequired: !enrolled, clients, startup, health };
   } catch (error) {
-    if (!inspected) {
-      // Staging failed before any owner or installation state was touched.
+    if (!inspected || unmanageable) {
+      // Staging failed before any owner or installation state was touched, or setup
+      // refused to proceed because a live daemon could not be authenticated. Never
+      // remove the launcher or release underneath that daemon.
       await rm(stage, { recursive: true, force: true }).catch(() => {});
+      if (unmanageable && previous && previousConfig !== undefined) await atomicText(paths.config, previousConfig).catch(() => {});
       throw error;
     }
     if (activated && previous) {
