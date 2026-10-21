@@ -77,7 +77,7 @@ export async function autostartStatus(paths: ManagedPaths): Promise<'scheduled-t
     // Enumerate with -ErrorAction Stop: a query failure must be distinguishable from a
     // missing task. Ending with a successful statement keeps Windows PowerShell's
     // $?-derived exit code at zero when the task is simply absent.
-    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Write-Output 'present'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
+    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Write-Output 'present'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
     return stdout.includes('present') ? 'scheduled-task' : 'disabled';
   } catch { return 'unknown'; }
 }
@@ -87,7 +87,7 @@ export async function removeAutostart(paths: ManagedPaths): Promise<{ removed: b
   const description = literal(`Managed by GrokAgentBridge: ${paths.home}`);
   let schedulerError: unknown, removed = false;
   try {
-    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false; Write-Output 'removed'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
+    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false; Write-Output 'removed'}; Write-Output 'checked'`], { windowsHide: true, timeout: 20000 });
     if (stdout.includes('removed')) removed = true;
   } catch (error) { schedulerError = error; }
   const file = startupFile();
