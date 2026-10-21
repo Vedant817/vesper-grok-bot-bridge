@@ -83,7 +83,7 @@ export async function inferVerifier(directory: string, explicit?: VerifyCommand)
  * "stopped": a daemon may still hold a live owner PID. Setup and enrollment must not
  * rotate credentials or rewrite owner state underneath it.
  */
-async function assertManageableDaemon(paths: ReturnType<typeof managedPaths>): Promise<'running' | 'stopped'> {
+export async function assertManageableDaemon(paths: ReturnType<typeof managedPaths>): Promise<'running' | 'stopped'> {
   const status = await daemonStatus(paths);
   if (status.state === 'running') return 'running';
   const ownerFile = join(paths.home, 'daemon-owner.json');
@@ -270,7 +270,7 @@ async function setupUnlocked(options: SetupOptions): Promise<Record<string, unkn
     if (process.platform === 'win32') await writeFile(join(paths.bin, 'grok-agent-bridge.cmd'), cliShim(), { mode: 0o600 });
     else await writeFile(join(paths.bin, 'grok-agent-bridge'), `#!/bin/sh\nexec '${process.execPath.replace(/'/g, "'\\''")}' '${paths.launcher.replace(/'/g, "'\\''")}' "$@"\n`, { mode: 0o700 });
     await addUserPath(paths.bin);
-    await writeFile(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md'), 'Use the approved local terminal to run `grok-agent-bridge call agent_discover`. Use `grok-agent-bridge call TOOL_NAME JSON_ARGUMENTS` for bridge operations. Discover provider/model availability, spawn or import the requested session, handle pending inputs, inspect changes, run verification, and finish only after verification passes. Never read or display bridge credentials. The bridge must run on this computer; cloud-only execution cannot reach it.\n', { mode: 0o600 });
+    await writeFile(join(paths.home, 'GROK_BOT_INSTRUCTIONS.md'), 'Use the approved local terminal to run `grok-agent-bridge call agent_discover`. Use `grok-agent-bridge call TOOL_NAME JSON_ARGUMENTS` or @arguments.json for operations. Route each user task with agent_dispatch: stable taskKey, exact provider/model/directory, instruction, and requestId retained across retries. Inspect instructionSubmitted; never resend merely because active work returned observation. A new independent task needs a new taskKey. Use agent_wait with cursors and agent_monitor for input/review/recovery. Review requirements and changes, run agent_verify, correct through explicit follow-up, and agent_finish only with current passing evidence. Use native human handoff for credentials, MFA, CAPTCHA, login approval and payments. Respect vendor approvals/limits; never rotate accounts, increase budgets, silently switch models, or replay uncertain mutations. Never read or display bridge credentials. The caller must stay active to supervise; no hidden reasoning model runs here. The bridge must run on this computer; cloud-only execution cannot reach it. One-time T3 Connect enrollment: grok-agent-bridge t3-connect login --endpoint HTTPS_MCP_URL --project-id PROJECT_ID.\n', { mode: 0o600 });
     // Publish the installation only after the launcher and shim exist, so a failure cannot
     // leave doctor (or a client) pointing at files that were never written.
     await atomicJson(paths.installation, { entrypoint, node: process.execPath, version: pkg.version, dependencyLockSha256: lockHash, pty, installedAt: new Date().toISOString(), previous: previous ? { entrypoint: previous.entrypoint, node: previous.node, version: previous.version } : undefined });

@@ -2,6 +2,8 @@
 
 Grok Bot is the supervisor. The bridge exposes native coding sessions as MCP tools. Each request selects a provider, exact model and directory. The bridge does not call an xAI reasoning API and does not use Grok Build as a replacement for the Grok Bot application.
 
+See [persistent supervision and T3 Connect](SUPERVISION.md) for one-time OAuth enrollment, task-aware new/continue routing, monitoring, crash-recovery rules and provider boundaries.
+
 ## Managed installation (recommended)
 
 `setup` creates a per-user installation separate from the checkout, hardens its directory, stores a DPAPI-encrypted bearer token, installs MCP client entries, and starts a restart-safe local daemon.
