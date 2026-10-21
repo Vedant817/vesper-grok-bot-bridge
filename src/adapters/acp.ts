@@ -2,12 +2,18 @@ import { RpcWorker } from './rpc-worker.js';
 import type { RpcMessage, Wire } from '../rpc.js';
 import type { WorkerEvent } from '../contracts.js';
 import { scopedPath } from './scoped-path.js';
+import { Redactor } from '../safety.js';
 
 /** ACP v1: session/prompt is the turn; session/turn is not a standard method. */
 export class AcpWorker extends RpcWorker {
   private session?: string;
   private active = false;
-  constructor(connect: (cwd: string) => Promise<Wire>, private readonly options: { model?: string; resumeId?: string } = {}) { super(connect); }
+  private cancelling = false;
+  private cancelTimer?: NodeJS.Timeout;
+  constructor(connect: (cwd: string) => Promise<Wire>, private readonly options: { model?: string; resumeId?: string } = {}) {
+    super(connect);
+    this.lifetime.signal.addEventListener('abort', () => clearTimeout(this.cancelTimer), { once: true });
+  }
   get nativeSessionId(): string | undefined { return this.session; }
   async start(cwd: string, task: string): Promise<void> {
     const rpc = await this.open(cwd);
@@ -31,20 +37,24 @@ export class AcpWorker extends RpcWorker {
     this.prompt(task);
   }
   private prompt(text: string): void {
+    if (this.lifetime.signal.aborted || !this.rpc) throw new Error('ACP connection closed');
     if (this.active) throw new Error('ACP turn already active');
     this.active = true;
-    void this.rpc!.request('session/prompt', { sessionId: this.session, prompt: [{ type: 'text', text }] }).then(result => {
-      this.active = false;
+    void this.rpc!.request('session/prompt', { sessionId: this.session, prompt: [{ type: 'text', text }] }, { timeoutMs: null, signal: this.lifetime.signal }).then(result => {
+      this.finishTurn();
       if (!result || typeof result.stopReason !== 'string') throw new Error('Invalid ACP prompt result');
       if (result.stopReason === 'end_turn') this.queue.push({ type: 'completed', summary: 'ACP end_turn' });
-      else this.queue.push({ type: 'failed', error: `ACP stop reason: ${result.stopReason}` });
-    }).catch(error => { this.active = false; this.queue.push({ type: 'failed', error: String(error) }); });
+      else this.queue.push({ type: 'failed', error: new Redactor().redact(`ACP stop reason: ${result.stopReason}`) });
+    }).catch(error => { this.finishTurn(); this.queue.push({ type: 'failed', error: new Redactor().redact(String(error)) }); });
   }
+  private finishTurn(): void { this.active = false; this.cancelling = false; clearTimeout(this.cancelTimer); this.cancelTimer = undefined; this.resolveAllPending(); }
   protected request(message: RpcMessage): WorkerEvent | undefined | null {
     const p = message.params as any;
     if (message.method === 'elicitation/create') { this.rpc!.respond(message.id!, { action: 'decline' }); return null; }
+    if (this.cancelling && p?.sessionId === this.session && message.method === '_supervisor/ask_question') { this.rpc!.reject(message.id!, 'Turn cancelled'); return null; }
     if (message.method === '_supervisor/ask_question' && p?.sessionId === this.session && typeof p.question === 'string') return { type: 'question', id: String(message.id), question: p.question, options: p.options };
     if (message.method === 'session/request_permission' && p?.sessionId === this.session) {
+      if (this.cancelling) { this.rpc!.respond(message.id!, { outcome: { outcome: 'cancelled' } }); return null; }
       const call = p.toolCall, locations = call?.locations;
       const fileMutation = ['edit', 'delete', 'move'].includes(call?.kind);
       const scoped = (!fileMutation || Array.isArray(locations) && locations.length > 0) && (!Array.isArray(locations) || locations.every((l: any) => scopedPath(this.cwd, l.path)));
@@ -64,5 +74,17 @@ export class AcpWorker extends RpcWorker {
     this.rpc!.respond(message.id!, option ? { outcome: { outcome: 'selected', optionId: option.optionId } } : { outcome: { outcome: 'cancelled' } });
   }
   async steer(message: string): Promise<void> { this.prompt(message); }
-  async cancel(): Promise<void> { if (this.session && this.active) this.rpc?.notify('session/cancel', { sessionId: this.session }); }
+  async cancel(): Promise<void> {
+    if (!this.session || !this.active || this.cancelling) return;
+    this.cancelling = true;
+    // Give the provider time to confirm cancellation; never allow a new prompt to replay an unsettled turn.
+    this.cancelTimer = setTimeout(() => this.rpc?.close(), 30000);
+    this.cancelTimer.unref();
+    this.rpc!.notify('session/cancel', { sessionId: this.session });
+    for (const [id, message] of this.pending) {
+      if (message.method === 'session/request_permission') this.rpc!.respond(message.id!, { outcome: { outcome: 'cancelled' } });
+      else this.rpc!.reject(message.id!, 'Turn cancelled');
+      this.resolvePending(id);
+    }
+  }
 }

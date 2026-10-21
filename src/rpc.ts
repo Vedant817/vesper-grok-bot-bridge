@@ -33,28 +33,39 @@ export type RpcMessage = { jsonrpc?: '2.0'; id?: string | number; method?: strin
 export interface Wire { send(message: RpcMessage): void; close(): void; onMessage?: (m: RpcMessage) => void; onClose?: (error: Error) => void }
 export class Rpc {
   private sequence = 0;
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; cleanup: () => void }>();
   private closed = false;
   onRequest?: (message: RpcMessage) => void;
   onNotification?: (message: RpcMessage) => void;
   onClose?: (error: Error) => void;
   constructor(private readonly wire: Wire, private readonly timeoutMs = 30000, private readonly jsonrpc = true) {
     wire.onMessage = message => {
+      if (this.closed) return;
       if (message.method) { if (message.id !== undefined) this.onRequest?.(message); else this.onNotification?.(message); return; }
       const entry = this.pending.get(message.id as number);
       if (!entry) return;
-      this.pending.delete(message.id as number); clearTimeout(entry.timer);
+      this.pending.delete(message.id as number); entry.cleanup();
       if (message.error) entry.reject(new Error(`RPC ${message.error.code}: ${message.error.message}`)); else entry.resolve(message.result);
     };
     wire.onClose = error => this.fail(error);
   }
-  request<T = any>(method: string, params: unknown): Promise<T> {
+  request<T = any>(method: string, params: unknown, options: { timeoutMs?: number | null; signal?: AbortSignal } = {}): Promise<T> {
     if (this.closed) return Promise.reject(new Error('RPC closed'));
+    if (options.signal?.aborted) return Promise.reject(options.signal.reason ?? new Error('RPC aborted'));
+    const timeout = options.timeoutMs === undefined ? this.timeoutMs : options.timeoutMs;
+    // Whole-turn requests must have an explicit lifecycle owner; ordinary RPCs retain their deadline.
+    if (timeout === null && !options.signal) return Promise.reject(new Error('RPC without timeout requires a lifecycle signal'));
+    if (timeout !== null && (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2147483647)) return Promise.reject(new Error('Invalid RPC timeout'));
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`RPC timeout: ${method}`)); }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-      try { this.send({ id, method, params }); } catch (e) { this.pending.delete(id); clearTimeout(timer); reject(e); }
+      let timer: NodeJS.Timeout | undefined;
+      const cleanup = () => { clearTimeout(timer); options.signal?.removeEventListener('abort', abort); };
+      const fail = (error: unknown) => { this.pending.delete(id); cleanup(); reject(error); };
+      const abort = () => fail(options.signal?.reason ?? new Error('RPC aborted'));
+      if (timeout !== null) timer = setTimeout(() => fail(new Error(`RPC timeout: ${method}`)), timeout);
+      this.pending.set(id, { resolve, reject, cleanup });
+      options.signal?.addEventListener('abort', abort, { once: true });
+      try { this.send({ id, method, params }); } catch (e) { fail(e); }
     });
   }
   notify(method: string, params?: unknown): void { this.send({ method, ...(params === undefined ? {} : { params }) }); }
@@ -63,7 +74,7 @@ export class Rpc {
   private send(message: RpcMessage): void { if (this.closed) throw new Error('RPC closed'); this.wire.send(this.jsonrpc ? { jsonrpc: '2.0', ...message } : message); }
   private fail(error: Error): void {
     if (this.closed) return; this.closed = true;
-    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
+    for (const p of this.pending.values()) { p.cleanup(); p.reject(error); }
     this.pending.clear(); this.onClose?.(error);
   }
   close(): void { this.fail(new Error('RPC closed')); this.wire.close(); }

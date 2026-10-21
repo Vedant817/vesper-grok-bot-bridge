@@ -3,13 +3,16 @@ import type { RpcMessage, Wire } from '../rpc.js';
 import type { WorkerEvent } from '../contracts.js';
 import { resolve } from 'node:path';
 import { scopedPath } from './scoped-path.js';
+import { Redactor } from '../safety.js';
 
 export class CodexWorker extends RpcWorker {
   private thread?: string;
   private turn?: string;
   private starting = false;
+  private cancelling = false;
   private early: RpcMessage[] = [];
   private fileChanges = new Map<string, any[]>();
+  private turnError?: unknown;
   constructor(connect: (cwd: string) => Promise<Wire>, private readonly options: { model?: string; resumeId?: string } = {}) { super(connect, false); }
   get nativeSessionId(): string | undefined { return this.thread; }
   async start(cwd: string, task: string): Promise<void> {
@@ -28,6 +31,8 @@ export class CodexWorker extends RpcWorker {
   }
   async steer(text: string): Promise<void> {
     if (this.starting || this.turn) throw new Error('Codex turn already active');
+    this.turnError = undefined;
+    this.cancelling = false;
     this.starting = true;
     try {
       const result = await this.rpc!.request('turn/start', { threadId: this.thread, input: [{ type: 'text', text }] });
@@ -35,10 +40,13 @@ export class CodexWorker extends RpcWorker {
       this.turn = result.turn.id;
     } finally { this.starting = false; }
     for (const message of this.early.splice(0)) this.notification(message);
+    if (this.cancelling) await this.cancel();
   }
   protected request(message: RpcMessage): WorkerEvent | undefined | null {
     const p = message.params as any;
     if (p?.threadId !== this.thread) return undefined;
+    if (!this.starting && !this.turn) return undefined;
+    if (this.cancelling) return undefined;
     if (p.turnId && !this.starting && p.turnId !== this.turn) return undefined;
     if (message.method === 'item/permissions/requestApproval') { this.rpc!.respond(message.id!, { permissions: {}, scope: 'turn' }); return null; }
     if (message.method === 'mcpServer/elicitation/request') { this.rpc!.respond(message.id!, { action: 'decline', content: null }); return null; }
@@ -58,9 +66,14 @@ export class CodexWorker extends RpcWorker {
   protected notification(message: RpcMessage): void {
     const p = message.params as any;
     if (p?.threadId !== this.thread) return;
+    if (message.method === 'serverRequest/resolved') {
+      if (typeof p.requestId === 'string' || typeof p.requestId === 'number') this.resolvePending(String(p.requestId));
+      return;
+    }
     if (this.starting) { if (this.early.length >= 100) this.queue.close(new Error('Early Codex event limit')); else this.early.push(message); return; }
     if (message.method === 'turn/completed' && (!this.turn || p.turn?.id !== this.turn)) return;
     if (p.turnId && p.turnId !== this.turn) return;
+    if (message.method === 'error' && this.turn && p.turnId === this.turn && p.willRetry !== true) this.turnError = p.error;
     if (message.method === 'item/started' && p.item?.type === 'fileChange' && typeof p.item.id === 'string' && Array.isArray(p.item.changes)) {
       if (this.fileChanges.size >= 100) this.fileChanges.delete(this.fileChanges.keys().next().value!);
       this.fileChanges.set(p.item.id, p.item.changes);
@@ -69,7 +82,10 @@ export class CodexWorker extends RpcWorker {
     if (message.method === 'turn/completed') {
       this.turn = undefined;
       this.fileChanges.clear();
-      this.queue.push(p.turn?.status === 'completed' ? { type: 'completed', summary: 'Codex turn completed' } : { type: 'failed', error: `Codex turn ${p.turn?.status}` });
+      this.resolveAllPending();
+      const error = p.turn?.error ?? this.turnError;
+      this.turnError = undefined;
+      this.queue.push(p.turn?.status === 'completed' ? { type: 'completed', summary: 'Codex turn completed' } : { type: 'failed', error: new Redactor().redact(`Codex turn ${p.turn?.status}${error ? ': ' + new Redactor().json(error) : ''}`).slice(0, 16000) });
     }
   }
   async respond(id: string, response: { allow: boolean; answer?: string }): Promise<void> {
@@ -79,5 +95,11 @@ export class CodexWorker extends RpcWorker {
       this.rpc!.respond(message.id!, { answers: { [q.id]: { answers: [response.answer ?? 'Unable to resolve safely'] } } });
     } else this.rpc!.respond(message.id!, { decision: response.allow ? 'accept' : 'decline' });
   }
-  async cancel(): Promise<void> { if (this.thread && this.turn) await this.rpc?.request('turn/interrupt', { threadId: this.thread, turnId: this.turn }); }
+  async cancel(): Promise<void> {
+    this.cancelling = true;
+    if (this.thread && this.turn) {
+      this.resolveAllPending();
+      await this.rpc?.request('turn/interrupt', { threadId: this.thread, turnId: this.turn });
+    }
+  }
 }

@@ -3,6 +3,7 @@ export type WorkerEvent =
   | { type: 'output'; text: string }
   | { type: 'question'; id: string; question: string; options?: string[]; allowCustomAnswer?: boolean }
   | { type: 'permission'; id: string; request: Permission }
+  | { type: 'pendingResolved'; id: string }
   | { type: 'completed'; summary: string }
   | { type: 'failed'; error: string };
 export interface Worker {
