@@ -1,5 +1,12 @@
 # Verification and remaining acceptance gates
 
+## Local desktop discovery checkpoint: 2026-10-22
+
+- The owner selected supervision on this computer first. Mesh remains optional and uninstalled; no remote execution, SSH enrollment, or shared OpenCode configuration changes were made.
+- `npm run lint`, serial Vitest, and build passed: **241 tests across 20 files**. Independent QA closed the Windows casing and ambiguous-launch findings, with **7 launcher tests and 20 adversarial checks passed**.
+- The standard managed installation was upgraded while no coding sessions were active. Existing client registrations and scheduled startup were preserved. The installed module automatically discovered T3 Desktop from its public launcher data and successfully ran the supported `connect status --json` command through the discovered native prefix. No manual executable path or copied native credential was needed.
+- Final `doctor`: healthy daemon, credential OK, launcher present, PTY available, scheduled-task startup, and no startup error. Host setup reported authenticated and linked; this does **not** establish live bot OAuth approval, Grok Bot UI handoff, or reboot acceptance. Those gates remain open.
+
 ## Supervision and Connect checkpoint: 2026-10-22
 
 - Final gate: `npm run lint`, `npm exec -- vitest run --cache=false --maxWorkers=1`, and `npm run build` passed: **234 tests across 19 files**. The default parallel headless run encountered a native Windows ConPTY worker crash; the serial full suite and a separate console-backed PTY run passed. Parallel headless native-PTY stability remains a limitation.
