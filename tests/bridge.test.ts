@@ -7,6 +7,7 @@ import { createWorktree, git } from '../src/worktree.js';
 import { AsyncQueue } from '../src/rpc.js';
 import type { Worker, WorkerEvent } from '../src/contracts.js';
 import { PendingRequestResolvedError } from '../src/contracts.js';
+import { Redactor } from '../src/safety.js';
 import type { Provider } from '../src/bridge/provider.js';
 
 class TestWorker implements Worker {
@@ -30,6 +31,18 @@ describe('portable session bridge', { timeout: 30000 }, () => {
   });
   afterEach(async () => { await service?.close(); await rm(base, { recursive: true, force: true }); });
   const input = (repository: string) => ({ provider: 'test', model: 'exact-model', directory: repository, task: 'Implement goal', requestId: 'once' });
+  it('redacts owner secrets in advertised ACP metadata before exposing discovery', async () => {
+    await service.close();
+    const secret = 'private-owner-credential-value-84321';
+    provider.acp = { protocolVersion: 1, agentInfo: { name: secret }, capabilities: { loadSession: true }, authMethods: [], authentication: 'not_checked' };
+    provider.protocol = 'acp';
+    service = await BridgeService.create({ stateDirectory: join(base, 'state'), roots: [{ directory: repository, verify: { executable: process.execPath, args: [] } }] }, [provider], new Redactor([secret]));
+    const catalog = service.discover();
+    expect(catalog[0].protocol).toBe('acp');
+    expect(catalog[0].acp?.authentication).toBe('not_checked');
+    expect(JSON.stringify(catalog)).not.toContain(secret);
+    expect(catalog[0].acp?.agentInfo?.name).toContain('[REDACTED]');
+  });
   it('isolates work and deduplicates concurrent start IDs, rejects mismatches and model substitution', async () => {
     const [a, b] = await Promise.all([service.start(input(repository)), service.start(input(repository))]);
     expect(a.id).toBe(b.id); expect(worker.starts).toBe(1); expect(a.cwd).not.toBe(repository);

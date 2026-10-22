@@ -64,7 +64,7 @@ export class BridgeService {
     return service;
     } catch (error) { await service.releaseOwner(); throw error; }
   }
-  discover() { return this.providers.map(({ id, label, models, available, reason }) => ({ id, label, models, available, reason, imports: this.config.imports.filter(i => i.provider === id).map(i => ({ id: i.id, nativeId: i.nativeId, model: i.model, directory: i.directory })) })); }
+  discover() { return this.clean(this.providers.map(({ id, label, models, available, reason, protocol, acp }) => ({ id, label, models, available, reason, ...(protocol ? { protocol } : {}), ...(acp ? { acp } : {}), imports: this.config.imports.filter(i => i.provider === id).map(i => ({ id: i.id, nativeId: i.nativeId, model: i.model, directory: i.directory })) }))); }
   /** Application-owned capability, never exposed as an MCP argument. */
   installMutationGuard(guard: () => void) {
     this.mutationGuard = guard;

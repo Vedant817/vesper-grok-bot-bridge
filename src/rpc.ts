@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import WebSocket from 'ws';
 
@@ -90,8 +91,9 @@ export class StdioWire implements Wire {
   onMessage?: (m: RpcMessage) => void;
   onClose?: (error: Error) => void;
   readonly process: ChildProcessWithoutNullStreams;
+  private closing = false;
   constructor(executable: string, args: string[], cwd: string, env?: Record<string, string>) {
-    this.process = spawn(executable, args, { cwd, env: childEnvironment(env), shell: false, windowsHide: true });
+    this.process = spawn(executable, args, { cwd, env: childEnvironment(env), shell: false, windowsHide: true, detached: process.platform !== 'win32' });
     let buffer = ''; const decoder = new StringDecoder('utf8');
     this.process.stdout.on('data', chunk => {
       buffer += decoder.write(chunk);
@@ -110,7 +112,29 @@ export class StdioWire implements Wire {
     this.process.stdin.on('error', () => this.onClose?.(new Error('Worker stdin closed')));
   }
   send(message: RpcMessage): void { this.process.stdin.write(JSON.stringify(message) + '\n'); }
-  close(): void { this.process.kill(); this.process.stdin.destroy(); }
+  close(): void {
+    if (this.closing) return;
+    this.closing = true;
+    // Helpers can inherit pipes and otherwise keep the host alive after the
+    // direct child exits. Releasing pipes is not proof native execution stopped.
+    this.process.stdin.destroy(); this.process.stdout.destroy(); this.process.stderr.destroy();
+    const pid = this.process.pid;
+    if (!pid || this.process.exitCode !== null || this.process.signalCode !== null) return;
+    if (process.platform === 'win32') {
+      const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
+      if (!systemRoot) { this.process.kill(); return; }
+      // Target only our still-live owned child tree, never a shared provider
+      // leader. No shell or PATH lookup; the helper itself has a deadline.
+      execFile(join(systemRoot, 'System32', 'taskkill.exe'), ['/PID', String(pid), '/T', '/F'], {
+        windowsHide: true, timeout: 5000, env: childEnvironment(),
+      }, error => {
+        if (error && this.process.exitCode === null && this.process.signalCode === null) this.process.kill();
+      });
+    } else {
+      // detached above creates a group owned by this transport on POSIX.
+      try { process.kill(-pid, 'SIGTERM'); } catch { this.process.kill(); }
+    }
+  }
 }
 
 export class SocketWire implements Wire {
