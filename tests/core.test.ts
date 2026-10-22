@@ -7,6 +7,7 @@ import { Memory } from '../src/memory.js';
 import { git, createWorktree, verifyWorktree, changes } from '../src/worktree.js';
 import { Supervisor } from '../src/supervisor.js';
 import type { Worker, WorkerEvent, Reasoner } from '../src/contracts.js';
+import { PendingRequestResolvedError } from '../src/contracts.js';
 
 describe('permission firewall', () => {
   const root = process.cwd();
@@ -99,6 +100,13 @@ describe('worktree and supervisor integration', () => {
     const result = await new Supervisor(w, reasoner, new Memory(join(base, 'cold'), new Redactor()), async () => ({ passed: false, output: 'fail' })).run({ cwd, goal: 'task' });
     expect(result.state).toBe('stopped'); expect(result.turns).toBe(2);
   });
+  it('continues to verification when a question was withdrawn during reasoning', async () => {
+    const { w } = worker([{ type: 'question', id: 'q', question: 'Which language?' }, { type: 'pendingResolved', id: 'q' }, { type: 'completed', summary: 'Done without answer' }]);
+    w.respond = async () => { throw new PendingRequestResolvedError('q'); };
+    let verified = 0;
+    const result = await new Supervisor(w, reasoner, new Memory(join(base, 'withdrawn'), new Redactor()), async () => { verified++; return { passed: true, output: 'ok' }; }).run({ cwd, goal: 'task' });
+    expect(result.state).toBe('completed'); expect(verified).toBe(1);
+  });
   it('bounds a hung worker with deadline and closes it', async () => {
     const { w, closed } = worker([]); w.next = async () => new Promise(() => {});
     const result = await new Supervisor(w, reasoner, new Memory(join(base, 'cold'), new Redactor()), async () => ({ passed: true, output: '' })).run({ cwd, goal: 'task', timeoutMs: 30 });
@@ -110,10 +118,10 @@ describe('worktree and supervisor integration', () => {
     await new Supervisor(w, model, new Memory(join(base, 'cold'), new Redactor(['sensitive-choice'])), async () => ({ passed: true, output: 'ok' }), new Redactor(['sensitive-choice'])).run({ cwd, goal: 'sensitive-choice' });
   });
   it('bounds a hung close', async () => {
-    const { w } = worker([{ type: 'failed', error: 'test' }]); w.close = async () => new Promise(() => {});
-    const start = Date.now();
+    const { w } = worker([{ type: 'failed', error: 'test' }]); let closeStarted = 0;
+    w.close = async () => { closeStarted = Date.now(); return new Promise(() => {}); };
     const result = await new Supervisor(w, reasoner, new Memory(join(base, 'cold'), new Redactor()), async () => ({ passed: true, output: '' })).run({ cwd, goal: 'test', timeoutMs: 10 });
-    expect(result.state).toBe('failed'); expect(Date.now() - start).toBeLessThan(3000);
+    expect(result.state).toBe('failed'); expect(closeStarted).toBeGreaterThan(0); expect(Date.now() - closeStarted).toBeLessThan(3000);
   });
   it('fingerprints whitespace filenames and changes beyond 200 untracked files', async () => {
     await writeFile(join(cwd, ' first.txt'), 'a');

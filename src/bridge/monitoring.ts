@@ -43,11 +43,12 @@ export interface SessionObservation {
 export function observeSession(s: SessionSnapshot, connected: boolean, stallAfterMs: number, now = Date.now()): SessionObservation {
   const activity = s.lastActivityAt && Date.parse(s.lastActivityAt);
   const stalledWarning = ['starting', 'running'].includes(s.status) && typeof activity === 'number' && Number.isFinite(activity) && now - activity >= stallAfterMs;
-  const recoveryRequired = s.status === 'interrupted' || (s.status === 'awaiting_review' && !connected);
+  const recoveryRequired = s.executionUncertain === true || s.status === 'interrupted' || (s.status === 'awaiting_review' && !connected);
   const pending = s.pending.map(annotatePending);
   let nextSuggestedAction = 'Wait for worker activity.';
   if (stalledWarning) nextSuggestedAction = 'Inspect worker health; inactivity is a warning, not a failure.';
   if (pending.length) nextSuggestedAction = pending.some(p => p.requiresHuman) ? 'Ask the human to complete the native secure-input or authentication handoff.' : 'Review pending input and respond explicitly.';
+  else if (s.executionUncertain) nextSuggestedAction = 'Native execution outcome is unknown. Preserve ownership and reconcile through the owner; do not resume or attach another controller.';
   else if (recoveryRequired) nextSuggestedAction = s.nativeId ? 'Explicitly resume the disconnected native session with a task.' : 'Inspect recovery state; no native session ID is available.';
   else if (s.status === 'awaiting_review') nextSuggestedAction = 'Review and verify the completed turn, or explicitly continue with a follow-up.';
   else if (s.status === 'failed') nextSuggestedAction = 'Inspect the diagnostic failure; resolve authentication or provider limits manually before any new task.';

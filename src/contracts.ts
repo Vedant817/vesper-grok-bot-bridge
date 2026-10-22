@@ -1,4 +1,6 @@
 import type { Permission } from './safety.js';
+/** Validation failed before any instruction could be submitted to a native worker. */
+export class InstructionNotSubmittedError extends Error {}
 /** A previously pending native request was withdrawn or already answered. */
 export class PendingRequestResolvedError extends Error {
   constructor(readonly requestId: string) {

@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, open, realpath, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import { annotatePending, humanQuestionReason, observeSession } from './monitoring.js';
 import type { Worker, WorkerEvent } from '../contracts.js';
+import { InstructionNotSubmittedError, PendingRequestResolvedError } from '../contracts.js';
 import { classifyPermission, Redactor, RedactedRecords, within } from '../safety.js';
 import { changes, createWorktree, git, verifyWorktree } from '../worktree.js';
 import { verifier } from '../verification.js';
@@ -10,7 +12,7 @@ import { bridgeConfigSchema, type BridgeConfig } from './config.js';
 import type { Provider } from './provider.js';
 import type { Evidence, SessionSnapshot, StartSession } from './types.js';
 
-interface Live { snapshot: SessionSnapshot; worker?: Worker; abort: AbortController; tail: Promise<unknown>; records: RedactedRecords; received: number }
+interface Live { snapshot: SessionSnapshot; worker?: Worker; abort: AbortController; tail: Promise<unknown>; records: RedactedRecords; received: number; stopping?: Promise<boolean> }
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const bounded = (value: string, label: string, limit = 16000) => { if (!value.trim() || value.length > limit) throw new Error(`Invalid ${label}`); };
 
@@ -19,6 +21,8 @@ export class BridgeService {
   private readonly sessions = new Map<string, Live>();
   private startTail: Promise<unknown> = Promise.resolve();
   private closed = false;
+  private mutationGuard?: () => void;
+  private readonly dispatchContext = new AsyncLocalStorage<boolean>();
   private readonly ownerToken = randomUUID();
   private constructor(private config: ReturnType<typeof bridgeConfigSchema.parse>, private providers: Provider[], private redactor: Redactor) {}
   static async create(input: BridgeConfig, providers: Provider[], redactor = new Redactor()): Promise<BridgeService> {
@@ -61,6 +65,12 @@ export class BridgeService {
     } catch (error) { await service.releaseOwner(); throw error; }
   }
   discover() { return this.providers.map(({ id, label, models, available, reason }) => ({ id, label, models, available, reason, imports: this.config.imports.filter(i => i.provider === id).map(i => ({ id: i.id, nativeId: i.nativeId, model: i.model, directory: i.directory })) })); }
+  /** Application-owned capability, never exposed as an MCP argument. */
+  installMutationGuard(guard: () => void) {
+    this.mutationGuard = guard;
+    return <T>(work: () => Promise<T>) => this.dispatchContext.run(true, work);
+  }
+  private assertMutationAllowed() { if (!this.dispatchContext.getStore()) this.mutationGuard?.(); }
   list() { return [...this.sessions.values()].map(l => this.public(l.snapshot)); }
   read(id: string, cursor = 0) {
     if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Error('Invalid cursor');
@@ -90,6 +100,7 @@ export class BridgeService {
   }
   start(input: StartSession): Promise<SessionSnapshot> {
     const operation = this.startTail.then(async () => {
+      this.assertMutationAllowed();
       if (this.closed) throw new Error('Bridge is closed');
       bounded(input.requestId, 'requestId', 200); bounded(input.task, 'task');
       const directory = await realpath(input.directory), root = this.config.roots.find(r => within(r.directory, directory));
@@ -105,20 +116,28 @@ export class BridgeService {
       const snapshot: SessionSnapshot = { id: randomUUID(), provider: input.provider, model: input.model, directory, worktree, cwd, status: 'starting', turns: 1, task: input.task, taskHashes: [digest(input.task)], requestId: input.requestId, fingerprint, cursor: 0, events: [], pending: [] };
       const live: Live = { snapshot, abort: new AbortController(), tail: Promise.resolve(), records: new RedactedRecords(this.redactor), received: 0 }; this.sessions.set(snapshot.id, live);
       await this.persist(live);
-      try { live.worker = await provider.create({ model: input.model }); await live.worker.start(cwd, input.task); snapshot.nativeId = live.worker.nativeSessionId; snapshot.status = 'running'; await this.persist(live); this.pump(live); }
-      catch (error) { await this.failControl(live, error); }
+      try {
+        if (live.abort.signal.aborted || this.closed) return this.public(snapshot);
+        const worker = await provider.create({ model: input.model });
+        if (live.abort.signal.aborted || this.closed) { await worker.close(); return this.public(snapshot); }
+        live.worker = worker; await worker.start(cwd, input.task); snapshot.nativeId = worker.nativeSessionId;
+        if (live.abort.signal.aborted || this.closed) { await this.persist(live); return this.public(snapshot); }
+        snapshot.status = 'running'; await this.persist(live); this.pump(live);
+      }
+      catch (error) { if (!live.abort.signal.aborted && !this.closed) await this.failControl(live, error); }
       return this.public(snapshot);
     });
     this.startTail = operation.catch(() => {}); return operation;
   }
   attach(importId: string, task: string, requestId: string): Promise<SessionSnapshot> {
     const operation = this.startTail.then(async () => {
+      this.assertMutationAllowed();
       if (this.closed) throw new Error('Bridge is closed'); bounded(task, 'task'); bounded(requestId, 'requestId', 200);
       const imported = this.config.imports.find(i => i.id === importId); if (!imported) throw new Error('Session import is not enrolled by owner');
       const fingerprint = digest(JSON.stringify({ importId, task, requestId }));
       const existing = [...this.sessions.values()].find(l => l.snapshot.requestId === requestId);
       if (existing) { if (existing.snapshot.fingerprint !== fingerprint) throw new Error('requestId already used for different input'); return this.public(existing.snapshot); }
-      if ([...this.sessions.values()].some(l => ((l.snapshot.provider === imported.provider && l.snapshot.nativeId === imported.nativeId) || l.snapshot.worktree === imported.worktree) && !['cancelled', 'finished', 'failed'].includes(l.snapshot.status))) throw new Error('Imported session already managed');
+      if ([...this.sessions.values()].some(l => ((l.snapshot.provider === imported.provider && l.snapshot.nativeId === imported.nativeId) || l.snapshot.worktree === imported.worktree) && (l.snapshot.executionUncertain || !['cancelled', 'finished', 'failed'].includes(l.snapshot.status)))) throw new Error('Imported session already managed or its execution outcome is unknown');
       if (this.sessions.size >= this.config.maxSessions) throw new Error('Session capacity reached');
       const provider = this.provider(imported.provider, imported.model);
       const root = this.config.roots.find(r => within(r.directory, imported.directory!))!;
@@ -126,14 +145,21 @@ export class BridgeService {
       const snapshot: SessionSnapshot = { id: randomUUID(), importId, provider: imported.provider, model: imported.model, directory: imported.directory!, nativeId: imported.nativeId, worktree: imported.worktree, cwd, status: 'starting', turns: 1, task, taskHashes: [digest(task)], requestId, fingerprint, cursor: 0, events: [], pending: [] };
       await this.validatePaths(snapshot);
       const live: Live = { snapshot, abort: new AbortController(), tail: Promise.resolve(), records: new RedactedRecords(this.redactor), received: 0 }; this.sessions.set(snapshot.id, live); await this.persist(live);
-      try { live.worker = provider.create({ model: imported.model, resumeId: imported.nativeId }); await live.worker.start(cwd, task); snapshot.nativeId = live.worker.nativeSessionId ?? imported.nativeId; snapshot.status = 'running'; await this.persist(live); this.pump(live); }
-      catch (error) { await this.failControl(live, error); }
+      try {
+        if (live.abort.signal.aborted || this.closed) return this.public(snapshot);
+        const worker = provider.create({ model: imported.model, resumeId: imported.nativeId }); live.worker = worker;
+        await worker.start(cwd, task); snapshot.nativeId = worker.nativeSessionId ?? imported.nativeId;
+        if (live.abort.signal.aborted || this.closed) { await this.persist(live); return this.public(snapshot); }
+        snapshot.status = 'running'; await this.persist(live); this.pump(live);
+      }
+      catch (error) { if (!live.abort.signal.aborted && !this.closed) await this.failControl(live, error); }
       return this.public(snapshot);
     });
     this.startTail = operation.catch(() => {}); return operation;
   }
   async respond(id: string, requestId: string, response: { allow?: boolean; answer?: string }) {
     return this.lock(this.get(id), async l => {
+      this.assertMutationAllowed();
       const s = l.snapshot, pending = s.pending.find(p => p.id === requestId);
       if (!pending || !l.worker || s.status !== 'awaiting_input') throw new Error('No live pending request');
       if (pending.type === 'question') {
@@ -146,7 +172,13 @@ export class BridgeService {
         if (classifyPermission(permission, s.worktree).risk === 'blocked') throw new Error('Blocked permission cannot be approved');
       }
       try { await l.worker.respond(requestId, { allow: pending.type === 'question' || response.allow === true, answer: response.answer }); }
-      catch (error) { await this.failControl(l, error); throw new Error(this.safeError(error)); }
+      catch (error) {
+        if (error instanceof PendingRequestResolvedError) {
+          s.pending = s.pending.filter(p => p.id !== requestId); if (!s.pending.length) s.status = 'running';
+          await this.persist(l); return { ...this.public(s), responseSubmitted: false, requestResolved: true };
+        }
+        await this.failControl(l, error); throw new Error(this.safeError(error));
+      }
       s.lastActivityAt = new Date().toISOString(); s.pending = s.pending.filter(p => p.id !== requestId); s.status = s.pending.length ? 'awaiting_input' : 'running'; await this.persist(l); return this.public(s);
     });
   }
@@ -163,23 +195,28 @@ export class BridgeService {
     return this.lock(this.get(id), l => l.snapshot.status === 'awaiting_review' && l.worker ? this.followupLocked(l, task) : this.resumeLocked(l, task));
   }
   private async followupLocked(l: Live, task: string) {
-    if (this.closed || l.abort.signal.aborted) throw new Error('Bridge or session is closed');
-    if (l.snapshot.status !== 'awaiting_review' || !l.worker) throw new Error('Follow-up requires a completed live turn');
-    if (l.snapshot.turns >= this.config.maxTurns) throw new Error('Turn limit reached');
-    if ((l.snapshot.taskHashes ?? [digest(l.snapshot.task)]).includes(digest(task))) throw new Error('Repeated identical follow-up rejected');
+    this.assertMutationAllowed();
+    if (this.closed || l.abort.signal.aborted || l.snapshot.executionUncertain) throw new InstructionNotSubmittedError('Bridge or session is closed or execution is uncertain');
+    if (l.snapshot.status !== 'awaiting_review' || !l.worker) throw new InstructionNotSubmittedError('Follow-up requires a completed live turn');
+    if (l.snapshot.turns >= this.config.maxTurns) throw new InstructionNotSubmittedError('Turn limit reached');
+    if ((l.snapshot.taskHashes ?? [digest(l.snapshot.task)]).includes(digest(task))) throw new InstructionNotSubmittedError('Repeated identical follow-up rejected');
     try { await l.worker.steer(task); }
     catch (error) { await this.failControl(l, error); throw new Error(this.safeError(error)); }
     l.snapshot.task = task; (l.snapshot.taskHashes ??= []).push(digest(task)); l.snapshot.turns++; l.snapshot.evidence = undefined; l.snapshot.status = 'running'; l.snapshot.lastActivityAt = new Date().toISOString(); await this.persist(l); return this.public(l.snapshot);
   }
   private async resumeLocked(l: Live, task: string) {
-    if (this.closed) throw new Error('Bridge is closed');
+    this.assertMutationAllowed();
+    if (this.closed) throw new InstructionNotSubmittedError('Bridge is closed');
     const s = l.snapshot;
-    if (!(s.status === 'interrupted' || (s.status === 'awaiting_review' && !l.worker)) || !s.nativeId) throw new Error('Only disconnected sessions with a native ID can resume');
-    if (s.turns >= this.config.maxTurns) throw new Error('Turn limit reached');
-    await this.validatePaths(s);
+    if (s.executionUncertain) throw new InstructionNotSubmittedError('Native execution outcome is unknown; owner reconciliation is required');
+    if (!(s.status === 'interrupted' || (s.status === 'awaiting_review' && !l.worker)) || !s.nativeId) throw new InstructionNotSubmittedError('Only disconnected sessions with a native ID can resume');
+    if (s.turns >= this.config.maxTurns) throw new InstructionNotSubmittedError('Turn limit reached');
     let worker: Worker;
-    try { worker = await this.provider(s.provider, s.model).create({ model: s.model, resumeId: s.nativeId }); l.worker = worker; await worker.start(s.cwd, task); }
-    catch (error) { await this.failControl(l, error); throw new Error(this.safeError(error)); }
+    try { await this.validatePaths(s); worker = await this.provider(s.provider, s.model).create({ model: s.model, resumeId: s.nativeId }); }
+    catch { throw new InstructionNotSubmittedError('Native resume validation failed before instruction submission'); }
+    try { l.worker = worker; await worker.start(s.cwd, task); }
+    catch (error) { if (l.abort.signal.aborted) return this.public(s); await this.failControl(l, error); throw new Error(this.safeError(error)); }
+    if (l.abort.signal.aborted) return this.public(s);
     l.worker = worker; l.abort = new AbortController(); s.task = task; (s.taskHashes ??= []).push(digest(task)); s.turns++; s.pending = []; s.evidence = undefined; s.error = undefined; s.status = 'running'; s.lastActivityAt = new Date().toISOString(); s.nativeId = worker.nativeSessionId ?? s.nativeId; await this.persist(l); this.pump(l); return this.public(s);
   }
   private async failControl(l: Live, error: unknown) {
@@ -202,7 +239,7 @@ export class BridgeService {
   async finish(id: string, evidenceId: string) {
     return this.lock(this.get(id), async l => {
       const s = l.snapshot;
-      if (s.status !== 'awaiting_review' || !s.evidence?.passed || s.evidence.id !== evidenceId) throw new Error('Passing current verification evidence is required');
+      if (s.executionUncertain || s.status !== 'awaiting_review' || !s.evidence?.passed || s.evidence.id !== evidenceId) throw new Error('Passing current verification evidence is required');
       await this.validatePaths(s);
       if (await this.fingerprint(s) !== s.evidence.contentHash) throw new Error('Worktree changed after verification');
       l.abort.abort(); const stopped = await this.stop(l);
@@ -220,7 +257,9 @@ export class BridgeService {
     const live = this.get(id); live.abort.abort(); const stopped = this.stop(live);
     return this.lock(live, async l => {
       if (['finished', 'cancelled'].includes(l.snapshot.status)) return this.public(l.snapshot);
-      const interrupted = await stopped; if (!interrupted) l.snapshot.error = 'Local session cancelled; worker interruption was not acknowledged.'; l.snapshot.pending = []; l.snapshot.status = 'cancelled'; await this.persist(l); return this.public(l.snapshot);
+      const interrupted = await stopped;
+      if (!interrupted) l.snapshot.error = 'Worker shutdown was not acknowledged; native execution outcome is unknown.';
+      l.snapshot.pending = []; l.snapshot.status = interrupted ? 'cancelled' : 'failed'; await this.persist(l); return this.public(l.snapshot);
     });
   }
   async close() {
@@ -290,16 +329,25 @@ export class BridgeService {
     if (safe.type === 'completed') safe.summary = safe.summary.slice(0, 16000);
     l.snapshot.events.push({ cursor: ++l.snapshot.cursor, event: safe, timestamp: new Date().toISOString() }); l.snapshot.events = l.snapshot.events.slice(-this.config.maxEvents);
   }
-  private async stop(l: Live) {
+  private stop(l: Live): Promise<boolean> {
+    if (l.stopping) return l.stopping;
+    const operation = this.stopWorker(l); l.stopping = operation;
+    void operation.finally(() => { if (l.stopping === operation) l.stopping = undefined; }).catch(() => {});
+    return operation;
+  }
+  private async stopWorker(l: Live) {
+    if (!l.worker) return !l.snapshot.executionUncertain;
     const bounded = async (operation: Promise<unknown>): Promise<boolean> => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try { return await Promise.race([operation.then(() => true, () => false), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 2000); })]); }
       finally { if (timer) clearTimeout(timer); }
     };
     const worker = l.worker; l.worker = undefined;
+    if (l.snapshot.status === 'starting' && !(l.snapshot.nativeId ?? worker.nativeSessionId)) l.snapshot.executionUncertain = true;
     const interrupted = await bounded(Promise.resolve().then(() => worker?.cancel()));
     const closed = await bounded(Promise.resolve().then(() => worker?.close()));
-    return interrupted && closed;
+    if (!interrupted || !closed) l.snapshot.executionUncertain = true;
+    return interrupted && closed && !l.snapshot.executionUncertain;
   }
   private async fingerprint(s: SessionSnapshot) { return digest(await git(s.worktree, ['rev-parse', 'HEAD']) + '\0' + (await changes(s.worktree)).contentHash); }
   private lock<T>(l: Live, operation: (live: Live) => Promise<T>): Promise<T> { const result = l.tail.then(() => operation(l)); l.tail = result.catch(() => {}); return result; }

@@ -3,9 +3,10 @@ import { open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { z } from 'zod';
 import type { BridgeService } from './service.js';
+import { InstructionNotSubmittedError } from '../contracts.js';
 
 const binding = z.object({ taskKey: z.string(), sessionId: z.string(), provider: z.string(), model: z.string(), directory: z.string() }).strict();
-const receipt = z.object({ requestId: z.string(), fingerprint: z.string(), taskKey: z.string(), action: z.enum(['start', 'continue', 'observe']), state: z.enum(['prepared', 'complete']), sessionId: z.string().optional(), instructionSubmitted: z.boolean() }).strict();
+const receipt = z.object({ requestId: z.string(), fingerprint: z.string(), taskKey: z.string(), action: z.enum(['start', 'continue', 'observe']), state: z.enum(['prepared', 'complete', 'rejected']), sessionId: z.string().optional(), instructionSubmitted: z.boolean() }).strict();
 const storage = z.object({ version: z.literal(1), bindings: z.array(binding).max(1000), receipts: z.array(receipt).max(1000) }).strict();
 type RoutingState = z.infer<typeof storage>;
 export interface DispatchTask {
@@ -17,7 +18,12 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 /** Explicit task identities, durable mutation receipts, and no replay of uncertain continuations. */
 export class TaskRouter {
   private tail: Promise<unknown> = Promise.resolve();
-  private constructor(private bridge: BridgeService, private file: string, private state: RoutingState) {}
+  private readonly submit: <T>(work: () => Promise<T>) => Promise<T>;
+  private constructor(private bridge: BridgeService, private file: string, private state: RoutingState) {
+    this.submit = bridge.installMutationGuard(() => {
+      if (this.state.receipts.some(r => r.state === 'prepared')) throw new Error('An operation is uncertain; reconcile its original receipt before using direct mutation tools. Use dispatch for independent tasks.');
+    });
+  }
   static async create(bridge: BridgeService, stateDirectory: string) {
     const file = join(stateDirectory, 'routing.json');
     let state: RoutingState = { version: 1, bindings: [], receipts: [] };
@@ -40,6 +46,7 @@ export class TaskRouter {
     const previous = this.state.receipts.find(r => r.requestId === input.requestId);
     if (previous) {
       if (previous.fingerprint !== fingerprint) throw new Error('requestId already used for different dispatch input');
+      if (previous.state === 'rejected') throw new Error('This request was rejected before submission; correct the input and use a new requestId');
       if (previous.state === 'prepared') {
         if (previous.action !== 'start') throw new Error('Continuation outcome is uncertain; inspect the original session before a new request. This instruction will not be replayed.');
         const recovered = this.bridge.list().find(s => s.requestId === this.startId(input.requestId));
@@ -58,6 +65,7 @@ export class TaskRouter {
     if (known && input.sessionId && input.sessionId !== known.sessionId) throw new Error('Task is already bound to a different session');
     if (known && intent === 'new') throw new Error('Use a new taskKey to start independent work; this task already owns a session');
     const sessionId = known?.sessionId ?? input.sessionId;
+    if (sessionId && this.state.receipts.some(r => r.state === 'prepared' && (r.sessionId ?? (r.action === 'start' ? this.bridge.list().find(s => s.requestId === this.startId(r.requestId))?.id : undefined)) === sessionId)) throw new Error('Selected session has an uncertain operation; changing the task key cannot authorize another instruction');
     if (!sessionId && intent === 'continue') throw new Error('No session is bound to this task; select an existing session or explicitly start a new task');
     const session = sessionId ? this.bridge.read(sessionId) : undefined;
     if (session && (session.provider !== input.provider || session.model !== input.model || session.directory !== directory)) throw new Error('Selected session does not match the exact task scope');
@@ -69,10 +77,20 @@ export class TaskRouter {
     if (session) this.bind(input, directory, session.id);
     // Persist intent before sending a native mutation. Failed/unknown continuations are never replayed.
     await this.persist();
-    if (action === 'start') {
-      const created = await this.bridge.start({ provider: input.provider, model: input.model, directory, task: input.instruction, requestId: this.startId(input.requestId) });
-      record.sessionId = created.id; this.bind(input, directory, created.id);
-    } else if (action === 'continue') await this.bridge.continueSession(session!.id, input.instruction);
+    try {
+      if (action === 'start') {
+        const created = await this.submit(() => this.bridge.start({ provider: input.provider, model: input.model, directory, task: input.instruction, requestId: this.startId(input.requestId) }));
+        record.sessionId = created.id; this.bind(input, directory, created.id);
+      } else if (action === 'continue') await this.submit(() => this.bridge.continueSession(session!.id, input.instruction));
+    } catch (error) {
+      // Service persists a start snapshot before native execution. No matching snapshot means no instruction was submitted.
+      const started = action === 'start' && this.bridge.list().find(s => s.requestId === this.startId(input.requestId));
+      const expected = hash(JSON.stringify({ provider: input.provider, model: input.model, directory, task: input.instruction, requestId: this.startId(input.requestId) }));
+      if (error instanceof InstructionNotSubmittedError || (action === 'start' && (!started || started.fingerprint !== expected))) {
+        record.state = 'rejected'; record.instructionSubmitted = false; await this.persist();
+      }
+      throw error;
+    }
     record.state = 'complete'; await this.persist();
     return this.result(record, false);
   }

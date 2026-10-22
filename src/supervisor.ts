@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Worker, Reasoner } from './contracts.js';
+import { PendingRequestResolvedError } from './contracts.js';
 import { classifyPermission, Redactor, RedactedRecords } from './safety.js';
 import { Memory } from './memory.js';
 import { verifyWorktree, changes } from './worktree.js';
@@ -23,6 +24,13 @@ export class Supervisor {
     let turns = 0;
     const seen = new Map<string, number>();
     const stream = new RedactedRecords(this.redactor);
+    const respond = async (id: string, response: { allow: boolean; answer?: string }) => {
+      try { await race(() => this.worker.respond(id, response)); }
+      catch (error) {
+        if (!(error instanceof PendingRequestResolvedError)) throw error;
+        await this.memory.append({ requestResolved: id, responseSubmitted: false });
+      }
+    };
     try {
       const goal = this.redactor.redact(config.goal);
       await this.memory.append({ goal, initialRepository: await changes(config.cwd) });
@@ -39,14 +47,14 @@ export class Supervisor {
         if (event.type === 'permission') {
           const decision = classifyPermission(event.request, config.cwd);
           await this.memory.append({ permission: event.id, decision });
-          await race(() => this.worker.respond(event.id, { allow: decision.allow }));
+          await respond(event.id, { allow: decision.allow });
         } else if (event.type === 'question') {
           if (/\b(?:approv\w*|permission|credential\w*|password|payment|refund|force.push|delete|token|api.key)\b/i.test(event.question + ' ' + (event.options ?? []).join(' '))) return { state: 'stopped', reason: 'Approval-shaped question requires a structured permission contract', turns };
           const key = createHash('sha256').update(event.question).digest('hex');
           seen.set(key, (seen.get(key) ?? 0) + 1);
           if (seen.get(key)! > 2) return { state: 'stopped', reason: 'Repeated question loop', turns };
           const answer = await race(() => this.reasoner.answer(this.redactor.redact(event.question), goal + '\n' + this.memory.context(), event.options?.map(o => this.redactor.redact(o)), signal));
-          await race(() => this.worker.respond(event.id, { allow: false, answer: this.redactor.redact(answer) }));
+          await respond(event.id, { allow: false, answer: this.redactor.redact(answer) });
         } else {
           turns++;
           const tail = stream.end(); if (tail) await this.memory.append({ type: 'output', text: tail });

@@ -81,15 +81,25 @@ describe('task-aware durable dispatch', { timeout: 30000 }, () => {
     const requestId = 'dispatch-' + createHash('sha256').update(input().requestId).digest('hex');
     await bridge.start({ provider: 'test', model: 'other', directory, task: 'Unrelated task', requestId });
     await expect(router.dispatch(input())).rejects.toThrow('different input');
-    await expect(router.dispatch(input())).rejects.toThrow('does not match');
-    await expect(router.dispatch({ ...input(), requestId: 'new-id' })).rejects.toThrow('uncertain'); expect(worker.starts).toBe(1);
+    await expect(router.dispatch(input())).rejects.toThrow('rejected before submission'); expect(worker.starts).toBe(1);
   });
   it('blocks fresh IDs when a start was persisted but its task binding was lost', async () => {
-    await router.dispatch(input());
+    const original = await router.dispatch(input());
     const { readFile } = await import('node:fs/promises');
     const file = join(stateDirectory, 'routing.json'), state = JSON.parse(await readFile(file, 'utf8'));
     state.receipts[0].state = 'prepared'; delete state.receipts[0].sessionId; state.bindings = [];
     await writeFile(file, JSON.stringify(state)); router = await TaskRouter.create(bridge, stateDirectory);
     await expect(router.dispatch({ ...input(), requestId: 'fresh' })).rejects.toThrow('uncertain'); expect(worker.starts).toBe(1);
+    await bridge.close(); worker = new TestWorker(); bridge = await BridgeService.create(config(), [provider]); router = await TaskRouter.create(bridge, stateDirectory);
+    await expect(bridge.resume(original.session.id, 'Apply migration')).rejects.toThrow('uncertain');
+    await expect(bridge.start({ provider: 'test', model: 'exact', directory, task: 'Bypass', requestId: 'direct' })).rejects.toThrow('uncertain'); expect(worker.starts).toBe(0);
+  });
+  it('allows corrections after known pre-send model and follow-up validation rejections', async () => {
+    await expect(router.dispatch({ ...input(), model: 'not-registered' })).rejects.toThrow('model');
+    const original = await router.dispatch({ ...input(), requestId: 'corrected' }); expect(worker.starts).toBe(1);
+    worker.queue.push({ type: 'completed', summary: 'Done' }); await wait(() => bridge.read(original.session.id).status === 'awaiting_review');
+    await expect(router.dispatch({ ...input(), requestId: 'repeat-task' })).rejects.toThrow('Repeated'); expect(worker.steers).toBe(0);
+    const correction = await router.dispatch({ ...input(), requestId: 'real-correction', instruction: 'Fix a missing edge' });
+    expect(correction.action).toBe('continue'); expect(worker.steers).toBe(1);
   });
 });

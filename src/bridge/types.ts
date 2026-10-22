@@ -14,4 +14,5 @@ export interface SessionSnapshot {
   pending: PendingRequest[];
   createdAt?: string; updatedAt?: string; lastActivityAt?: string;
   evidence?: Evidence; error?: string;
+  executionUncertain?: boolean;
 }

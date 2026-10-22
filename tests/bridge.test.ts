@@ -6,6 +6,7 @@ import { BridgeService } from '../src/bridge/service.js';
 import { createWorktree, git } from '../src/worktree.js';
 import { AsyncQueue } from '../src/rpc.js';
 import type { Worker, WorkerEvent } from '../src/contracts.js';
+import { PendingRequestResolvedError } from '../src/contracts.js';
 import type { Provider } from '../src/bridge/provider.js';
 
 class TestWorker implements Worker {
@@ -61,6 +62,14 @@ describe('portable session bridge', { timeout: 30000 }, () => {
     const originalClose = worker.close.bind(worker); worker.close = async () => { closed = true; await originalClose(); };
     const s = await service.start(input(repository)); await service.cancel(s.id); expect(interrupted).toBe(true); expect(closed).toBe(true);
   });
+  it('preserves acknowledged cancellation when startup resolves later', async () => {
+    let release!: () => void; const starting = new Promise<void>(resolve => { release = resolve; });
+    worker.start = async () => { worker.starts++; await starting; };
+    const pending = service.start(input(repository));
+    await wait(() => worker.starts === 1); const session = service.list()[0];
+    expect((await service.cancel(session.id)).status).toBe('cancelled'); release(); await pending;
+    expect(service.read(session.id).status).toBe('cancelled'); expect(service.read(session.id).error).toBeUndefined();
+  });
   it('redacts secrets split across output events', async () => {
     const s = await service.start(input(repository)); worker.queue.push({ type: 'output', text: 'xai-' }); worker.queue.push({ type: 'output', text: 'abcdefgh12345678\n' }); worker.queue.push({ type: 'completed', summary: 'Done' });
     await wait(() => service.read(s.id).status === 'awaiting_review');
@@ -92,6 +101,11 @@ describe('portable session bridge', { timeout: 30000 }, () => {
     worker.cancel = async () => { throw new Error('not acknowledged'); };
     await expect(service.finish(s.id, evidence.id)).rejects.toThrow('not acknowledged'); expect(service.read(s.id).status).toBe('failed');
     await expect(service.verify(s.id)).rejects.toThrow('completed turn'); await expect(service.finish(s.id, evidence.id)).rejects.toThrow('Passing');
+    expect((await service.cancel(s.id)).status).toBe('failed'); expect(service.monitor()[0]).toMatchObject({ recoveryRequired: true });
+    expect(service.monitor()[0].nextSuggestedAction).toContain('unknown');
+    await service.close(); worker = new TestWorker();
+    service = await BridgeService.create({ stateDirectory: join(base, 'state'), roots: [{ directory: repository, verify: { executable: process.execPath, args: ['-e', 'process.exit(0)'] } }], imports: [{ id: 'unsafe-import', provider: 'test', model: 'exact-model', nativeId: 'native-test', worktree: s.worktree }] }, [provider]);
+    await expect(service.attach('unsafe-import', 'Bypass ownership', 'unsafe')).rejects.toThrow('already managed'); expect(worker.starts).toBe(0);
   });
   it('keeps questions pending until a valid option and prevents blocked permission overrides', async () => {
     const s = await service.start(input(repository));
@@ -103,6 +117,14 @@ describe('portable session bridge', { timeout: 30000 }, () => {
     await wait(() => service.read(s.id).pending.length === 1);
     await expect(service.respond(s.id, 'p1', { allow: true })).rejects.toThrow('Blocked');
     await service.respond(s.id, 'p1', { allow: false }); expect(worker.replies).toHaveLength(2);
+  });
+  it('keeps the worker healthy when a request is withdrawn immediately before response', async () => {
+    const s = await service.start(input(repository)); worker.queue.push({ type: 'question', id: 'withdrawn', question: 'Which file?' });
+    await wait(() => service.read(s.id).pending.length === 1);
+    worker.respond = async () => { throw new PendingRequestResolvedError('withdrawn'); };
+    const result = await service.respond(s.id, 'withdrawn', { answer: 'source.txt' });
+    expect(result).toMatchObject({ responseSubmitted: false, requestResolved: true, status: 'running', pending: [] });
+    worker.queue.push({ type: 'completed', summary: 'Done' }); await wait(() => service.read(s.id).status === 'awaiting_review');
   });
   it('recovers live sessions as interrupted and invalidates stale input', async () => {
     const s = await service.start(input(repository));
