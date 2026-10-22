@@ -19,6 +19,16 @@ class ProbeWire implements Wire {
 }
 
 describe('initialize-only ACP discovery', () => {
+  it('permits a cold native startup beyond ten seconds while retaining the thirty-second bound', async () => {
+    vi.useFakeTimers();
+    const wire = new ProbeWire(undefined);
+    wire.send = message => { wire.messages.push(message); setTimeout(() => wire.onMessage?.({ id: message.id, result: { protocolVersion: 1 } }), 14000); };
+    try {
+      const pending = probeAcp(() => wire);
+      await vi.advanceTimersByTimeAsync(14000);
+      expect(await pending).toMatchObject({ protocolVersion: 1 }); expect(wire.closed).toBe(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('reports advertised protocol/auth capabilities without authenticating or creating sessions', async () => {
     const wire = new ProbeWire({ protocolVersion: 1, agentInfo: { name: 'Example ACP', version: '1.2.3' }, agentCapabilities: { loadSession: true }, authMethods: [{ id: 'native_login', name: 'Native login' }] });
     expect(await probeAcp(() => wire)).toEqual({ protocolVersion: 1, agentInfo: { name: 'Example ACP', version: '1.2.3' }, capabilities: { loadSession: true }, authMethods: [{ id: 'native_login', name: 'Native login' }], authentication: 'not_checked' });

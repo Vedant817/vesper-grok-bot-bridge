@@ -16,7 +16,7 @@ function text(value: unknown): string | undefined {
 }
 
 /** Bounded, initialize-only ACP v1 probe. Always releases the owned transport. */
-export async function probeAcp(connect: () => Wire, timeoutMs = 10000): Promise<AcpDiscovery> {
+export async function probeAcp(connect: () => Wire, timeoutMs = 30000): Promise<AcpDiscovery> {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000) throw new Error('Invalid ACP discovery timeout');
   const rpc = new Rpc(connect(), timeoutMs);
   rpc.onRequest = message => rpc.reject(message.id!, 'Discovery does not serve agent requests');
