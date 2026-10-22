@@ -191,7 +191,7 @@ Custom CLI adapters may be registered under `providers` with an explicit protoco
 }
 ```
 
-Supported protocols are `acp`, `codex` and `claude`; this is an extension point, not a claim that every application speaks them. Antigravity and Grok Bot have no built-in worker-control adapter. Grok Bot is the supervisor/client in this workflow. Raw interactive CLIs without structured approvals cannot receive blanket affirmative keystrokes.
+Supported protocols are `acp`, `codex` and `claude`; this is an extension point, not a claim that every application speaks them. Native Grok Build and OpenCode use ACP; maintained adapters can expose Codex and Claude through ACP. Antigravity now has an official standalone ACP server that requires its own enrollment; ordinary `agy` is not the ACP entrypoint. See [connections and live results](CLI_CONNECTIONS.md). Grok Bot remains the supervisor/client. Raw interactive CLIs without structured approvals cannot receive blanket affirmative keystrokes.
 
 To enable T3, add `t3: {"projectId":"YOUR_T3_PROJECT_ID"}` and privately set `T3_BEARER_TOKEN`. Runtime endpoint discovery uses the user's T3 runtime file; explicit endpoint/legacyEndpoint/tokenEnv overrides are owner-configurable. Issue a scoped token with `t3 auth session issue --subject mcp-client --scope orchestration:read --scope orchestration:operate --ttl 1h`. Discovery exposes IDs such as `t3:codex` and the live composer model catalog. The launch binds the explicit worktree and checks the returned model selection. T3 pending-question tools cannot approve runtime permissions; those waits report a blocker rather than being bypassed.
 
