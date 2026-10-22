@@ -8,6 +8,7 @@ import { ensureCredential, readCredential } from './managed/credentials.js';
 import { daemonStatus } from './managed/runtime.js';
 import { powershellEnvironment, powershellPath } from './managed/powershell.js';
 import { readRemoteConfig, saveRemoteConfig, remoteCredentialPaths, remoteConfigSchema } from './remote/config.js';
+import { signOwnerRequest } from './remote/owner-auth.js';
 
 export function parseRemoteOptions(args: string[]) {
   const options: { home?: string; origin?: string; port?: number; command?: string; args?: string[] } = {};
@@ -46,14 +47,37 @@ async function copyCredential(token: string): Promise<void> {
 export async function remoteCli(args: string[]): Promise<boolean> {
   if (args[0] !== 'remote') return false;
   const action = args[1];
-  if (!['enable', 'disable', 'status', 'copy-token'].includes(action)) throw new Error('Usage: remote enable --origin <HTTPS origin> --port <port> [--tunnel-command <absolute executable> --tunnel-args <JSON array>] | remote status|disable|copy-token [--home <folder>]');
-  const options = parseRemoteOptions(args.slice(2)), paths = managedPaths(options.home);
+  if (!['enable', 'disable', 'status', 'copy-token', 'pending', 'approve', 'clients', 'revoke'].includes(action)) throw new Error('Usage: remote enable --origin <HTTPS origin> --port <port> [--tunnel-command <absolute executable> --tunnel-args <JSON array>] | remote status|disable|copy-token|pending|clients [--home <folder>] | remote approve <request id> | remote revoke <client id> [--home <folder>]');
+  const approvalId = action === 'approve' || action === 'revoke' ? args[2] : undefined;
+  if (action === 'approve' && (!approvalId || !/^[a-f0-9]{32,128}$/.test(approvalId))) throw new Error('Supply the exact pending authorization request id');
+  if (action === 'revoke' && !z.string().uuid().safeParse(approvalId).success) throw new Error('Supply the exact authorized client id');
+  const options = parseRemoteOptions(args.slice(action === 'approve' || action === 'revoke' ? 3 : 2)), paths = managedPaths(options.home);
+  if (['pending', 'approve', 'clients', 'revoke'].includes(action)) {
+    const config = await readRemoteConfig(paths);
+    if (!config) throw new Error('Remote gateway is not enrolled');
+    const daemon = await daemonStatus(paths);
+    if (daemon.state !== 'running') throw new Error('Managed bridge must be running for owner authorization');
+    const runtime = JSON.parse(await readFile(join(paths.home, 'remote-runtime.json'), 'utf8')) as { instanceId?: unknown; state?: unknown };
+    if (runtime.instanceId !== daemon.receipt.instanceId || runtime.state !== 'listening') throw new Error('Remote gateway is not listening for the current managed instance');
+    const mutation = action === 'approve' || action === 'revoke';
+    const path = `/owner/${action === 'revoke' ? 'revoke-client' : action}`, method = mutation ? 'POST' : 'GET';
+    const body = mutation ? action === 'approve' ? { id: approvalId } : { clientId: approvalId } : undefined;
+    const proof = signOwnerRequest(await readCredential(remoteCredentialPaths(paths)), { method, path, body });
+    const response = await fetch(`http://127.0.0.1:${config.port}${path}`, {
+      method, redirect: 'error', signal: AbortSignal.timeout(10000),
+      headers: { ...proof, 'Content-Type': 'application/json' },
+      ...(mutation ? { body: JSON.stringify(body) } : {})
+    });
+    if (!response.ok) throw new Error('Owner authorization request was rejected or expired');
+    // These routes return public client identities/redirects only, never codes/tokens.
+    console.log(JSON.stringify(await response.json(), null, 2)); return true;
+  }
   if (action === 'status') {
     const config = await readRemoteConfig(paths);
     const credential = config ? await readCredential(remoteCredentialPaths(paths)).then(() => 'ready', () => 'unavailable') : 'not_created';
     const daemon = await daemonStatus(paths);
-    const runtime = await readFile(join(paths.home, 'remote-runtime.json'), 'utf8').then(text => z.object({ state: z.enum(['disabled', 'listening', 'failed']), endpoint: z.string().url().optional(), tunnel: z.enum(['started', 'external']).optional(), publicReachability: z.literal('not_checked') }).strict().parse(JSON.parse(text)), () => undefined);
-    console.log(JSON.stringify({ enabled: !!config, endpoint: config ? `${config.origin}/mcp` : undefined, credential, daemon: daemon.state, runtime: daemon.state === 'running' ? runtime : undefined, publicReachability: 'not_checked' }, null, 2)); return true;
+    const runtime = await readFile(join(paths.home, 'remote-runtime.json'), 'utf8').then(text => z.object({ instanceId: z.string().uuid(), state: z.enum(['disabled', 'listening', 'failed']), endpoint: z.string().url().optional(), tunnel: z.enum(['started', 'external']).optional(), publicReachability: z.literal('not_checked') }).strict().safeParse(JSON.parse(text)), () => undefined);
+    console.log(JSON.stringify({ enabled: !!config, endpoint: config ? `${config.origin}/mcp` : undefined, credential, daemon: daemon.state, runtime: daemon.state === 'running' && runtime?.success && runtime.data.instanceId === daemon.receipt.instanceId ? runtime.data : undefined, publicReachability: 'not_checked' }, null, 2)); return true;
   }
   if (action === 'copy-token') {
     if (!await readRemoteConfig(paths)) throw new Error('Remote gateway is not enrolled');
@@ -71,6 +95,6 @@ export async function remoteCli(args: string[]): Promise<boolean> {
     if (!next.success) throw new Error('Invalid remote configuration');
     await ensureCredential(remoteCredentialPaths(paths));
     await saveRemoteConfig(paths, next.data);
-    console.log(JSON.stringify({ enabled: true, endpoint: `${options.origin.replace(/\/$/, '')}/mcp`, restartRequired: true, authentication: 'private-bearer', oauth: false }, null, 2)); return true;
+    console.log(JSON.stringify({ enabled: true, endpoint: `${options.origin.replace(/\/$/, '')}/mcp`, restartRequired: true, authentication: 'oauth-pkce-and-private-bearer' }, null, 2)); return true;
   } finally { await lock.release(); }
 }

@@ -33,15 +33,21 @@ Optional owner-selected native tunnel processes can be started/stopped with the 
 
 For an already authenticated Tailscale installation, a separate Funnel listener can provide the HTTPS origin, for example `tailscale funnel --bg --https=8443 http://127.0.0.1:43189`. Check existing `tailscale funnel status --json` first; preserve its other listeners. Tailnet policy may require human approval. Use the exact HTTPS origin printed by the native tool, including its port. Follow [Tailscale's supported Funnel setup](https://tailscale.com/docs/reference/tailscale-cli/funnel).
 
-In Grok Bot, add a **Remote HTTPS MCP connector** pointing to `https://your-public-host.example/mcp`. This gateway uses an owner-provisioned bearer credential; it does not implement OAuth. Use a connector's secure custom Authorization header field. If the client supports OAuth only and cannot store a secure header, this enrollment route is unsupported for that client.
+In Grok Bot, add a **Remote HTTPS MCP connector** pointing to `https://your-public-host.example/mcp` and choose OAuth. The gateway implements public client registration and PKCE S256 through the official MCP SDK. Its authorization page displays the unverified client name and exact callback, then waits for approval on the coding computer. No credential needs copying into Grok Bot or conversation.
 
-On Windows, run locally:
+Inspect the request locally, confirm that its client and callback match the connection you initiated, then approve its exact request ID:
 
 ```powershell
-grok-agent-bridge remote copy-token
+grok-agent-bridge remote pending
+grok-agent-bridge remote approve EXACT_PENDING_REQUEST_ID
+grok-agent-bridge remote clients
 ```
 
-Paste into the secure header value as `Bearer <paste>`. Never paste into conversation. The command transfers only to the OS clipboard and clears it after60seconds if unchanged. Windows clipboard history/sync follows your OS settings. A separate gateway credential is protected with CurrentUser DPAPI on Windows and private file permissions elsewhere. Never share it: it grants the bridge's owner-enrolled coding capabilities. To revoke access, stop the bridge, remove the connector credential, and disable remote exposure with `remote disable`. Disabling retains the credential privately; rotation is not yet a CLI feature.
+Approval grants `coding:operate` for the enrolled bridge: it can operate the owner-enrolled repositories and providers. Only approve a connector you intended to control them. Authorization requests expire after five minutes, codes after60seconds, and approved access tokens after30days. There are no refresh tokens; repeat approval after expiry. Temporary client registrations expire rather than permanently consuming approved-client slots. Approved client identities and revocations persist across daemon restart; tokens are signed and bound to this gateway's exact resource and client. Native MCP sessions cannot be borrowed by a different OAuth client.
+
+Revoke a connector with `grok-agent-bridge remote revoke EXACT_CLIENT_ID`. Stop the bridge and run `remote disable` to disable all remote exposure. A separate local gateway owner credential is protected with CurrentUser DPAPI on Windows and private file permissions elsewhere; it authenticates local approvals without appearing in argv, chat or command output. Disabling retains that credential privately; key rotation is not yet a CLI feature.
+
+For other clients that can safely store private Authorization headers, Windows `remote copy-token` transfers the owner bearer to the OS clipboard and clears it after60seconds if unchanged. This is a broad owner credential: never give it to an OAuth-only connector, ordinary conversation, or an untrusted client. Clipboard history/sync follows your OS settings. Grok Bot uses OAuth instead because its masked-secret workflow cannot reference a stored secret from connector headers.
 
 ## Grok Bot instruction
 

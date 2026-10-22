@@ -1,5 +1,7 @@
 # Portable coding agent bridge
 
+For background CLI control without T3, use the [standalone HTTPS/OAuth setup](STANDALONE.md). Grok Bot's cloud connectors cannot execute a local Windows stdio command. The gateway keeps that communication on MCP; local-command examples below are optional compatibility routes, not the recommended Grok Bot setup.
+
 For native Grok Bot control of T3 threads, follow the [T3 Connect quickstart](T3_CONNECT_QUICKSTART.md). T3 already provides the remote MCP server; this optional bridge and its setup commands are for the separate multi-CLI route.
 
 Grok Bot is the supervisor. The bridge exposes native coding sessions as MCP tools. Each request selects a provider, exact model and directory. The bridge does not call an xAI reasoning API and does not use Grok Build as a replacement for the Grok Bot application.

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import express from 'express';
 import { request } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -23,6 +24,78 @@ async function raw(url: string, extra: Record<string, string>) {
   });
 }
 describe('standalone remote HTTP boundary', () => {
+  it('binds every session to its OAuth client and rechecks token scope and expiry', async () => {
+    let closed = 0;
+    const host = await serveRemote({ origin, token, oauth: { router: express.Router(), verify: async supplied => ({
+      token: supplied, clientId: supplied === 'client-b' ? 'b' : 'a', scopes: supplied === 'no-scope' ? [] : ['coding:operate'],
+      expiresAt: supplied === 'expired' ? 1 : Math.floor(Date.now() / 1000) + 300, resource: new URL(origin + '/mcp')
+    }) }, createServer: () => { const server = factory(); server.onclose = () => { closed++; }; return server; } });
+    try {
+      const ownerHeaders = { ...headers, Authorization: 'Bearer client-a' };
+      const initialized = await fetch(host.url + '/mcp', { method: 'POST', headers: ownerHeaders, body: JSON.stringify(initialize) });
+      expect(initialized.status).toBe(200); await initialized.text();
+      const id = initialized.headers.get('mcp-session-id')!;
+      for (const method of ['GET', 'POST', 'DELETE']) {
+        const stolen = await fetch(host.url + '/mcp', { method, headers: { ...headers, Authorization: 'Bearer client-b', 'mcp-session-id': id } });
+        expect(stolen.status).toBe(403); expect(closed).toBe(0);
+      }
+      expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...headers, 'mcp-session-id': id } })).status).toBe(403);
+      for (const invalid of ['no-scope', 'expired']) expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...headers, Authorization: `Bearer ${invalid}`, 'mcp-session-id': id } })).status).toBe(401);
+      expect(closed).toBe(0);
+      expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...ownerHeaders, 'mcp-session-id': id } })).status).toBe(200);
+      expect(closed).toBe(1);
+    } finally { await host.close(); }
+  });
+  it('exposes OAuth metadata before bearer auth but authenticates every MCP method and passes verified context', async () => {
+    const router = express.Router();
+    router.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => { res.json({ resource: origin + '/mcp' }); });
+    const verify = vi.fn(async (supplied: string) => {
+      if (supplied !== 'valid-oauth-access-token') throw new Error('secret internal scope/audience diagnostic');
+      return { token: supplied, clientId: 'enrolled-client', scopes: ['coding:operate'], resource: new URL(origin + '/mcp') };
+    });
+    const host = await serveRemote({ origin, token, oauth: { router, verify }, createServer: () => {
+      const server = factory();
+      server.setRequestHandler(CallToolRequestSchema, async (_req, extra) => ({ content: [{ type: 'text', text: extra.authInfo?.clientId ?? 'private-owner' }] }));
+      return server;
+    } });
+    const client = new Client({ name: 'oauth-client', version: '1' });
+    try {
+      expect((await fetch(host.url + '/.well-known/oauth-protected-resource/mcp')).status).toBe(200);
+      expect(await raw(host.url + '/.well-known/oauth-protected-resource/mcp', { Host: 'untrusted.invalid' })).toBe(403);
+      expect(await raw(host.url + '/.well-known/oauth-protected-resource/mcp', { Origin: 'https://untrusted.invalid' })).toBe(403);
+      for (const method of ['GET', 'POST', 'DELETE']) {
+        const unauth = await fetch(host.url + '/mcp', { method });
+        expect(unauth.status).toBe(401);
+        expect(unauth.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`);
+        const rejected = await fetch(host.url + '/mcp', { method, headers: { Authorization: 'Bearer wrong-scope-or-audience' } });
+        expect(rejected.status).toBe(401); expect(await rejected.text()).not.toContain('diagnostic');
+      }
+      expect((await fetch(host.url + '/not-an-oauth-route')).status).toBe(404);
+      await client.connect(new StreamableHTTPClientTransport(new URL(host.url + '/mcp'), { requestInit: { headers: { Authorization: 'Bearer valid-oauth-access-token' } } }));
+      expect((await client.callTool({ name: 'agent_test', arguments: {} })).content).toEqual([{ type: 'text', text: 'enrolled-client' }]);
+      const beforePrivate = verify.mock.calls.length;
+      expect(await raw(host.url + '/mcp', {})).toBe(405);
+      expect(verify.mock.calls.length).toBe(beforePrivate);
+    } finally { await client.close(); await host.close(); }
+  });
+  it('expires idle sessions using an unreferenced bounded timer', async () => {
+    let expiry: (() => void) | undefined, timer: NodeJS.Timeout | undefined, closed = 0;
+    const originalTimeout = globalThis.setTimeout;
+    const host = await serveRemote({ origin, token, createServer: () => { const server = factory(); server.onclose = () => { closed++; }; return server; } });
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+      const scheduled = originalTimeout(callback, delay, ...args);
+      if (delay === 3_600_000) { expiry = () => callback(...args); timer = scheduled; }
+      return scheduled;
+    }) as typeof setTimeout);
+    try {
+      const response = await fetch(host.url + '/mcp', { method: 'POST', headers, body: JSON.stringify(initialize) });
+      expect(response.status).toBe(200); await response.text();
+      expect(timer?.hasRef()).toBe(false); expect(expiry).toBeTypeOf('function');
+      expiry!();
+      expect(closed).toBe(1);
+      expect((await fetch(host.url + '/mcp', { headers: { ...headers, 'mcp-session-id': response.headers.get('mcp-session-id')! } })).status).toBe(404);
+    } finally { spy.mockRestore(); await host.close(); }
+  });
   it('serves real SDK initialize, discovery, and tool calls, with loopback-only binding', async () => {
     const host = await serveRemote({ origin, token, createServer: factory });
     const client = new Client({ name: 'remote-client', version: '1' });

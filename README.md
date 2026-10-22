@@ -1,5 +1,7 @@
 # Coding Agent Bridge for Grok Bot
 
+Launch and supervise **background coding CLIs without T3 Code** using the [standalone setup](docs/STANDALONE.md). Grok Bot connects over authenticated HTTPS/OAuth; this wrapper runs the selected local worker through ACP or its native API. Local MCP hosts can use stdio.
+
 For **Grok Bot controlling T3 Code**, start with the [native MCP quickstart](docs/T3_CONNECT_QUICKSTART.md) and [copyable bot role](docs/T3_BOT_INSTRUCTIONS.md). T3 already provides the HTTPS MCP server: add its public T3 Connect URL as a native Grok Bot connector and approve OAuth. No bridge installation, terminal communication, or xAI API key is required for that route. This is an unofficial community integration, not vendor certification.
 
 Build a shareable documentation kit with `npm run pack:onboarding`. Recipients extract it and follow the guide; nothing needs executing. The [distribution guide](docs/DISTRIBUTION.md) also covers building the optional CLI package, checksums, and release limits. Downloads are built locally; no npm or public marketplace publication is implied.

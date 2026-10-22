@@ -17,6 +17,7 @@ import { createManagedProxy } from './proxy.js';
 import { readRemoteConfig, remoteCredentialPaths } from '../remote/config.js';
 import { serveRemote } from '../remote/http.js';
 import { startRemoteTunnel } from '../remote/tunnel.js';
+import { createRemoteOAuth } from '../remote/oauth.js';
 export { connectManaged } from './proxy.js';
 
 const receiptSchema = z.object({ url: z.string().url(), pid: z.number().int().positive(), instanceId: z.string().uuid(), startedAt: z.string().datetime() }).strict();
@@ -263,7 +264,9 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
     if (config && !closing) {
       const remoteToken = await readCredential(remoteCredentialPaths(paths));
       if (closing) return;
-      remote = await serveRemote({ origin: config.origin, token: remoteToken, createServer: () => createManagedProxy(paths), port: config.port });
+      const oauth = await createRemoteOAuth({ origin: config.origin, secret: remoteToken, home: paths.home });
+      if (closing) return;
+      remote = await serveRemote({ origin: config.origin, token: remoteToken, oauth, createServer: () => createManagedProxy(paths), port: config.port });
       if (config.tunnel && !closing) tunnel = await startRemoteTunnel(config);
       remoteState = { state: 'listening', endpoint: `${config.origin}/mcp`, tunnel: config.tunnel ? 'started' : 'external', publicReachability: 'not_checked' };
     }
@@ -273,7 +276,7 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
   }
   const remoteTemporary = `${remoteRuntime}.${receipt.instanceId}.tmp`;
   if (closing) return;
-  try { await writeFile(remoteTemporary, JSON.stringify(remoteState), { flag: 'wx', mode: 0o600 }); await rename(remoteTemporary, remoteRuntime); }
+  try { await writeFile(remoteTemporary, JSON.stringify({ ...remoteState, instanceId: receipt.instanceId }), { flag: 'wx', mode: 0o600 }); await rename(remoteTemporary, remoteRuntime); }
   catch { /* A diagnostic write must not terminate healthy native workers. */ }
   finally { await unlink(remoteTemporary).catch(() => {}); }
   })();

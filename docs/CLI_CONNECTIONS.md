@@ -2,7 +2,11 @@
 
 Grok Bot remains the supervisor. A coding CLI becomes a worker through a supported session protocol; it is not made controllable merely by adding an MCP server to that CLI. MCP exposes tools to a caller; ACP runs coding sessions, streams updates, and asks the client about permissions. Codex app-server is another supported worker interface.
 
-## Recommended on this computer: keep the existing T3 connector
+## Standalone CLI control
+
+Use the [standalone guide](STANDALONE.md) to launch background CLI processes through ACP or Codex app-server without T3 installed. Grok Bot reaches the wrapper through its own authenticated HTTPS/OAuth gateway. Local MCP clients can use the installed stdio proxy. The wrapper's older loopback-only HTTP endpoint remains private; use the separate remote gateway for public HTTPS.
+
+## Optional existing T3 connector
 
 ```text
 Grok Bot native t3-connect MCP tools
@@ -14,7 +18,7 @@ Grok Bot native t3-connect MCP tools
 
 Use [the native T3 setup](T3_CONNECT_QUICKSTART.md) once. Grok Bot selects a provider and exact model from `orchestrator_capabilities`, then creates or continues a thread through the same connection. A separate connector per coding CLI is not needed. T3 owns its provider installation, authentication, and protocol adapters. Native provider login remains a separate requirement.
 
-The standalone bridge below is optional for MCP clients that need workers outside T3. Its loopback HTTP endpoint is authenticated and host-restricted; it is not a public OAuth endpoint for Grok Bot. Do not expose it with a tunnel or claim it replaces the working native T3 connector. Local MCP clients can use its installed stdio proxy.
+The standalone bridge below operates independently from this T3 route. Authentication and acceptance results for the two routes must be reported separately.
 
 ## Supported interfaces
 

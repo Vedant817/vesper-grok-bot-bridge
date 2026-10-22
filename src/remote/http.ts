@@ -3,14 +3,15 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 
 /** HTTPS is terminated by the owner's tunnel. This listener is never exposed on a LAN. */
-export async function serveRemote(options: { origin: string; token: string; createServer: () => Server; port?: number }): Promise<{ server: HttpServer; url: string; close: () => Promise<void> }> {
+export async function serveRemote(options: { origin: string; token: string; createServer: () => Server; port?: number; oauth?: { router: express.RequestHandler; verify: (token: string) => Promise<AuthInfo> } }): Promise<{ server: HttpServer; url: string; close: () => Promise<void> }> {
   const origin = new URL(options.origin);
   if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash || ![origin.origin, `${origin.origin}/`].includes(options.origin)) throw new Error('Remote origin must be an HTTPS origin');
   if (options.token.length < 32 || /[\r\n]/.test(options.token)) throw new Error('Remote token must contain at least 32 characters');
   const expected = createHash('sha256').update(`Bearer ${options.token}`).digest();
-  type Session = { server: Server; transport: StreamableHTTPServerTransport; timer?: NodeJS.Timeout; closed: boolean };
+  type Session = { server: Server; transport: StreamableHTTPServerTransport; principal: string; timer?: NodeJS.Timeout; closed: boolean };
   const sessions = new Map<string, Session>(), live = new Set<Session>();
   let closing = false, localHost = '';
   const dispose = async (session: Session) => {
@@ -25,16 +26,41 @@ export async function serveRemote(options: { origin: string; token: string; crea
     // Read raw Host: forwarded headers and Express proxy interpretation are irrelevant.
     if (req.headers.host !== origin.host && req.headers.host !== localHost) { res.status(403).end(); return; }
     if (req.headers.origin !== undefined && req.headers.origin !== origin.origin) { res.status(403).end(); return; }
-    if (!timingSafeEqual(createHash('sha256').update(req.headers.authorization ?? '').digest(), expected)) { res.setHeader('WWW-Authenticate', 'Bearer'); res.status(401).json({ error: 'Unauthorized' }); return; }
     if (closing) { res.status(503).end(); return; }
     next();
+  });
+  // Enrollment endpoints have their own protocol and owner-approval guards. Never
+  // let that public router handle (or bypass authentication for) the MCP route.
+  if (options.oauth) app.use((req, res, next) => {
+    if (req.path === '/mcp') { next(); return; }
+    return options.oauth!.router(req, res, next);
+  });
+  app.use(async (req, res, next) => {
+    if (req.path !== '/mcp') { next(); return; }
+    if (timingSafeEqual(createHash('sha256').update(req.headers.authorization ?? '').digest(), expected)) { next(); return; }
+    const supplied = /^Bearer ([^\s]+)$/i.exec(req.headers.authorization ?? '')?.[1];
+    if (supplied && options.oauth) {
+      try {
+        const auth = await options.oauth.verify(supplied);
+        if (!auth.clientId || !auth.scopes.includes('coding:operate') || (auth.expiresAt !== undefined && (!Number.isFinite(auth.expiresAt) || auth.expiresAt <= Date.now() / 1000)) || (auth.resource !== undefined && auth.resource.href !== `${origin.origin}/mcp`)) throw new Error('Invalid authorization');
+        (req as express.Request & { auth?: AuthInfo }).auth = auth;
+        next(); return;
+      } catch { /* An untrusted token must not reveal provider diagnostics. */ }
+    }
+    res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${origin.origin}/.well-known/oauth-protected-resource/mcp"`);
+    res.status(401).json({ error: 'Unauthorized' });
   });
   app.use(express.json({ limit: '64kb' }));
   app.all('/mcp', async (req, res) => {
     // Express accepts a trailing slash by default; expose exactly one route.
     if (req.originalUrl !== '/mcp') { res.status(404).end(); return; }
+    const auth = (req as express.Request & { auth?: AuthInfo }).auth;
+    const principal = auth ? `oauth:${createHash('sha256').update(auth.clientId).digest('hex')}` : 'private:owner';
     const id = req.headers['mcp-session-id'];
     let session = typeof id === 'string' ? sessions.get(id) : undefined;
+    // A valid token grants access to its own transport sessions only. A leaked
+    // session ID must never let another enrolled client read or terminate it.
+    if (session && session.principal !== principal) { res.status(403).end(); return; }
     if (!session) {
       if (id !== undefined) { res.status(404).end(); return; }
       if (req.method !== 'POST' || req.body?.method !== 'initialize') { res.status(405).end(); return; }
@@ -42,7 +68,7 @@ export async function serveRemote(options: { origin: string; token: string; crea
       try {
         const server = options.createServer();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID, onsessioninitialized: assigned => { if (!session!.closed) sessions.set(assigned, session!); } });
-        session = { server, transport, closed: false }; live.add(session);
+        session = { server, transport, principal, closed: false }; live.add(session);
         const current = session, previousClose = server.onclose;
         server.onclose = () => { try { previousClose?.(); } finally { void dispose(current); } };
         await server.connect(transport);

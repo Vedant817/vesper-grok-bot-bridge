@@ -61,7 +61,7 @@ describe('standalone managed remote integration', { timeout: 60000 }, () => {
       await ensureCredential(paths); await writeFile(join(home, 'remote.json'), '{private-invalid');
       daemon = await runManagedDaemon(paths, { repository: home, redactor: new Redactor() });
       expect((await healthManaged(paths)).running).toBe(true);
-      expect(JSON.parse(await readFile(join(home, 'remote-runtime.json'), 'utf8'))).toEqual({ state: 'failed', publicReachability: 'not_checked' });
+      expect(JSON.parse(await readFile(join(home, 'remote-runtime.json'), 'utf8'))).toMatchObject({ state: 'failed', publicReachability: 'not_checked', instanceId: daemon.receipt.instanceId });
     } finally { await daemon?.close(); await rm(home, { recursive: true, force: true }); }
   });
   it('serves SDK discovery through the authenticated gateway and retains enrollment after restart', async () => {
