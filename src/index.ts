@@ -12,6 +12,7 @@ import { bridgeApplication } from './bridge/application.js';
 import { McpConnection } from './adapters/mcp.js';
 import { managedCli } from './managed/cli.js';
 import { connectCli } from './connect-cli.js';
+import { providerCli } from './provider-cli.js';
 export { TaskRouter } from './bridge/router.js';
 export { BridgeService } from './bridge/service.js';
 export { bridgeApplication } from './bridge/application.js';
@@ -36,6 +37,7 @@ async function readJson(file: string): Promise<unknown> {
 }
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
+  if (await providerCli(args)) return;
   if (await connectCli(args)) return;
   if (await managedCli(args)) return;
   const [mode, file, ...rest] = args;
@@ -66,6 +68,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.once('SIGINT', stop); process.once('SIGTERM', stop); return;
   }
   if (!mode || mode === '--help') {
+    console.log('One-time ACP enrollment (owner CLI only):\n  grok-agent-bridge provider add --id <id> --command <absolute native executable> --args <JSON array> [--models <JSON array>] [--auth-method <advertised id>] [--home <absolute folder>]\n  grok-agent-bridge provider list [--home <absolute folder>]\n');
     console.log('T3 Connect (one-time approval):\n  grok-agent-bridge t3-connect login --endpoint <HTTPS /mcp URL> --project-id <id> [--home <folder>]\n  grok-agent-bridge t3-connect status [--home <folder>]\n');
     console.log('Managed installation:\n  grok-agent-bridge setup [--repository <folder>] [--home <folder>] [--no-clients] [--no-autostart] [--force-setup-lock]\n  grok-agent-bridge enroll <folder> [--home <folder>] [--verify-executable <exe> --verify-args <JSON array>] [--force-setup-lock]\n  grok-agent-bridge doctor | start | stop | connect [--home <folder>]\n  grok-agent-bridge call <agent_tool> [JSON or @arguments.json] [--home <folder>]\n  grok-agent-bridge autostart enable|disable [--home <folder>]\n\nAdvanced: bridge-stdio <owner.json> | bridge-http <owner.json> [port]\n          bridge-discover <owner.json> | bridge-call <URL> <agent_tool> [arguments.json]\nLegacy: run <config.json> <goal> | run-plan <config.json> <tasks.json>\n        serve-stdio <config.json> | serve-http <config.json> [port]\n\nNo XAI_API_KEY required for bridge mode. Native agents retain their own authentication.'); return;
   }
