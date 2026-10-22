@@ -13,6 +13,10 @@ import { controlMac, controlPipe, ensureControlKey, sameMac } from './control.js
 import { processAlive } from './process.js';
 import { Redactor } from '../safety.js';
 import type { ManagedPaths } from './paths.js';
+import { createManagedProxy } from './proxy.js';
+import { readRemoteConfig, remoteCredentialPaths } from '../remote/config.js';
+import { serveRemote } from '../remote/http.js';
+import { startRemoteTunnel } from '../remote/tunnel.js';
 export { connectManaged } from './proxy.js';
 
 const receiptSchema = z.object({ url: z.string().url(), pid: z.number().int().positive(), instanceId: z.string().uuid(), startedAt: z.string().datetime() }).strict();
@@ -203,6 +207,9 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
   const pipe = pipePath(paths, receipt.instanceId);
   const accepted = new Set<string>(), acceptedOrder: string[] = [];
   let closing: Promise<void> | undefined;
+  let remote: Awaited<ReturnType<typeof serveRemote>> | undefined;
+  let tunnel: Awaited<ReturnType<typeof startRemoteTunnel>> | undefined;
+  let remoteStartup: Promise<void> | undefined;
   const stopSignal = () => { void close().catch(() => {}); };
   const server = createServer(socket => {
     let input = '', handled = false;
@@ -229,6 +236,9 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
   async function close(): Promise<void> {
     if (!closing) closing = (async () => {
       process.removeListener('SIGINT', stopSignal); process.removeListener('SIGTERM', stopSignal);
+      await remoteStartup;
+      await tunnel?.close().catch(() => {});
+      await remote?.close().catch(() => {});
       await Promise.allSettled([http.close(), services!.bridge?.close(), new Promise<void>(resolve => { if (server.listening) server.close(() => resolve()); else resolve(); })]);
       try { if ((await receiptAt(paths)).instanceId === receipt.instanceId) await unlink(paths.receipt); } catch {}
       if (process.platform !== 'win32') await unlink(pipe).catch(() => {});
@@ -243,7 +253,32 @@ export async function runManagedDaemon(paths: ManagedPaths, servicesOverride?: S
     finally { await unlink(temporary).catch(() => {}); }
   } catch (error) { await close(); await startupError(paths, token, error); throw error; }
   await unlink(join(paths.home, 'startup-error.json')).catch(() => {});
-  process.once('SIGINT', stopSignal); process.once('SIGTERM', stopSignal);
+  // Remote exposure is opt-in and separate from native provider credentials.
+  // Failure leaves local workers available and publishes only a fixed diagnostic.
+  const remoteRuntime = join(paths.home, 'remote-runtime.json');
+  remoteStartup = (async () => {
+  let remoteState: { state: 'disabled' | 'listening' | 'failed'; endpoint?: string; tunnel?: 'started' | 'external'; publicReachability: 'not_checked' } = { state: 'disabled', publicReachability: 'not_checked' };
+  try {
+    const config = await readRemoteConfig(paths);
+    if (config && !closing) {
+      const remoteToken = await readCredential(remoteCredentialPaths(paths));
+      if (closing) return;
+      remote = await serveRemote({ origin: config.origin, token: remoteToken, createServer: () => createManagedProxy(paths), port: config.port });
+      if (config.tunnel && !closing) tunnel = await startRemoteTunnel(config);
+      remoteState = { state: 'listening', endpoint: `${config.origin}/mcp`, tunnel: config.tunnel ? 'started' : 'external', publicReachability: 'not_checked' };
+    }
+  } catch {
+    await tunnel?.close().catch(() => {}); await remote?.close().catch(() => {});
+    remoteState = { state: 'failed', publicReachability: 'not_checked' };
+  }
+  const remoteTemporary = `${remoteRuntime}.${receipt.instanceId}.tmp`;
+  if (closing) return;
+  try { await writeFile(remoteTemporary, JSON.stringify(remoteState), { flag: 'wx', mode: 0o600 }); await rename(remoteTemporary, remoteRuntime); }
+  catch { /* A diagnostic write must not terminate healthy native workers. */ }
+  finally { await unlink(remoteTemporary).catch(() => {}); }
+  })();
+  await remoteStartup;
+  if (!closing) { process.once('SIGINT', stopSignal); process.once('SIGTERM', stopSignal); }
   return { receipt, close };
 }
 

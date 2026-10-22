@@ -8,6 +8,8 @@ The coding host must remain awake and online with T3's backend/tunnel running. O
 
 ## Optional bridge for coding CLIs outside T3
 
+For background CLI control **without T3 Code**, follow the [standalone setup](docs/STANDALONE.md). Local MCP clients use stdio; Grok Bot's cloud connector requires the wrapper's authenticated HTTPS gateway. Native CLI processes run locally through ACP or their supported native APIs.
+
 Grok Bot can supervise installed coding agents through this portable MCP bridge: choose a directory, provider and model; start or enter a session; answer questions and permissions; review work; send corrections; and finish only with passing verification. Grok Bot supplies the reasoning through its own subscription. The bridge does **not** require an `XAI_API_KEY`.
 
 Start with the [portable bridge setup and Grok Bot instructions](docs/BRIDGE.md) and [owner configuration example](examples/bridge.json). Native adapters support Codex app-server, OpenCode/ACP, Grok Build/ACP and Claude Code stream JSON, with optional T3 Code MCP discovery. [General ACP enrollment and actual live results](docs/CLI_CONNECTIONS.md) cover maintained Codex/Claude adapters and Google's standalone Antigravity ACP server. Installing an application alone does not establish authentication or session control.
@@ -23,7 +25,7 @@ grok-agent-bridge doctor
 grok-agent-bridge call agent_discover
 ```
 
-Existing terminals and coding clients may need a one-time restart after installation. Grok Bot uses the installed command through approved local execution; its own application permissions remain in force.
+Existing terminals and coding clients may need a one-time restart after installation. Grok Bot's cloud connector reaches the local daemon through the separately enrolled HTTPS gateway; its own application permissions remain in force.
 
 Install the packed CLI once, then let it provision a private home, credentials, MCP client entries, and a restart-safe local daemon:
 
