@@ -47,12 +47,12 @@ async function copyCredential(token: string): Promise<void> {
 export async function remoteCli(args: string[]): Promise<boolean> {
   if (args[0] !== 'remote') return false;
   const action = args[1];
-  if (!['enable', 'disable', 'status', 'copy-token', 'pending', 'approve', 'clients', 'revoke'].includes(action)) throw new Error('Usage: remote enable --origin <HTTPS origin> --port <port> [--tunnel-command <absolute executable> --tunnel-args <JSON array>] | remote status|disable|copy-token|pending|clients [--home <folder>] | remote approve <request id> | remote revoke <client id> [--home <folder>]');
+  if (!['enable', 'disable', 'status', 'copy-token', 'pending', 'approve', 'clients', 'revoke', 'diagnostics'].includes(action)) throw new Error('Usage: remote enable --origin <HTTPS origin> --port <port> [--tunnel-command <absolute executable> --tunnel-args <JSON array>] | remote status|disable|copy-token|pending|clients|diagnostics [--home <folder>] | remote approve <request id> | remote revoke <client id> [--home <folder>]');
   const approvalId = action === 'approve' || action === 'revoke' ? args[2] : undefined;
   if (action === 'approve' && (!approvalId || !/^[a-f0-9]{32,128}$/.test(approvalId))) throw new Error('Supply the exact pending authorization request id');
   if (action === 'revoke' && !z.string().uuid().safeParse(approvalId).success) throw new Error('Supply the exact authorized client id');
   const options = parseRemoteOptions(args.slice(action === 'approve' || action === 'revoke' ? 3 : 2)), paths = managedPaths(options.home);
-  if (['pending', 'approve', 'clients', 'revoke'].includes(action)) {
+  if (['pending', 'approve', 'clients', 'revoke', 'diagnostics'].includes(action)) {
     const config = await readRemoteConfig(paths);
     if (!config) throw new Error('Remote gateway is not enrolled');
     const daemon = await daemonStatus(paths);

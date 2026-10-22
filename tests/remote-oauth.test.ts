@@ -87,12 +87,46 @@ it('rejects owner bearer credentials, replayed signatures and body tampering', a
   const signed = signOwnerRequest(secret, { method: 'POST', path: '/owner/approve', body: { id: 'a'.repeat(32) } });
   expect((await fetch(base + '/owner/approve', { method: 'POST', headers: { ...signed, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'b'.repeat(32) }) })).status).toBe(403);
 });
+it('owner diagnostics expose bounded contract facts without request secrets or callback values', async () => {
+  const sentinel = 'SENTINEL_SECRET_MUST_NOT_LEAK';
+  const response = await register(`https://user:${sentinel}@client.example.test/${sentinel}?secret=${sentinel}#${sentinel}`, { client_name: sentinel, client_secret: sentinel, token_endpoint_auth_method: sentinel, grant_types: ['authorization_code', 'refresh_token', sentinel], response_types: ['code', sentinel], scope: sentinel });
+  expect(response.status).toBe(400);
+  await fetch(base + '/token?code=' + sentinel, { method: 'POST', body: new URLSearchParams({ client_id: sentinel, code: sentinel, code_verifier: sentinel, state: sentinel }) });
+  await fetch(base + '/authorize?code=' + sentinel + '&state=' + sentinel, { redirect: 'manual' });
+  expect((await fetch(base + '/owner/diagnostics')).status).toBe(403);
+  const diagnostics = await (await owner('/owner/diagnostics')).json();
+  const serialized = JSON.stringify(diagnostics); expect(serialized).not.toContain(sentinel); expect(serialized).not.toContain(secret);
+  const registration = diagnostics.observations.find((item: any) => item.path === '/register').registration;
+  expect(registration).toMatchObject({ bodyStage: 'parsed', authMethod: 'unknown', grantTypes: ['authorization_code', 'refresh_token', 'unknown'], responseTypes: ['code', 'unknown'], scopePresent: true, scopeExpected: false, hasClientSecret: true, redirectUris: [{ protocol: 'https:', hostname: 'client.example.test', hasQuery: true, hasFragment: true, hasCredentials: true }] });
+  expect(serialized).not.toMatch(/code_verifier|client_name|headers/);
+});
+it('diagnostics retain at most 32 finished observations and no arbitrary path contents', async () => {
+  for (let i = 0; i < 40; i++) await fetch(base + '/.well-known/oauth-authorization-server?state=not-retained');
+  const diagnostics = await (await owner('/owner/diagnostics')).json();
+  expect(diagnostics.observations).toHaveLength(32);
+  expect(JSON.stringify(diagnostics)).not.toContain('not-retained');
+  expect(diagnostics.observations[0]).toEqual({ method: 'GET', path: '/.well-known/oauth-authorization-server', status: 200 });
+});
 it.each(['javascript:alert(1)', 'http://remote.example.test/callback', 'https://user:pass@client.test/callback', 'https://client.test/callback#fragment', 'https://client.test/callback#', ' https://client.test/callback'])('rejects unsafe callback %s', async redirect => { expect((await register(redirect)).status).toBe(400); });
-it('permits native loopback callbacks but rejects unsupported auth/grants/scope', async () => {
+it('permits native loopback callbacks and returns supported metadata while authorization rejects scope escalation', async () => {
   expect((await register('http://127.0.0.1:35411/callback')).status).toBe(201);
-  for (const metadata of [{ token_endpoint_auth_method: 'client_secret_post' }, { grant_types: ['authorization_code', 'refresh_token'] }, { scope: 'coding:admin' }]) expect((await register(redirectUri, metadata)).status).toBe(400);
+  for (const metadata of [{ token_endpoint_auth_method: 'client_secret_post' }, { grant_types: ['authorization_code', 'refresh_token'] }, { scope: 'coding:admin' }]) {
+    const response = await register(redirectUri, metadata); expect(response.status).toBe(201);
+    const client = await response.json(); expect(client).toMatchObject({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code'], response_types: ['code'], scope: 'coding:operate' }); expect(client.client_secret).toBeUndefined();
+  }
   const client = await (await register()).json(); expect((await request(client.client_id, { scope: 'coding:admin' })).status).toBe(302);
   expect(await (await owner('/owner/pending')).json()).toEqual([]);
+});
+it('negotiates omitted or unsupported registration preferences without secrets or refresh and preserves original diagnostics', async () => {
+  const omitted = await fetch(base + '/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ redirect_uris: [redirectUri] }) }); expect(omitted.status).toBe(201);
+  const first = await omitted.json(); expect(first.token_endpoint_auth_method).toBe('none'); expect(first.client_secret).toBeUndefined();
+  const response = await register(redirectUri, { token_endpoint_auth_method: 'client_secret_post', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code', 'token'], scope: 'coding:admin', client_secret: 'never-retained-client-secret' });
+  expect(response.status).toBe(201); const client = await response.json();
+  expect(client).toMatchObject({ token_endpoint_auth_method: 'none', grant_types: ['authorization_code'], response_types: ['code'], scope: 'coding:operate' }); expect(client.client_secret).toBeUndefined();
+  const diagnostics = await (await owner('/owner/diagnostics')).json();
+  expect(diagnostics.observations[0].registration.authMethod).toBe('missing');
+  expect(diagnostics.observations[1].registration).toMatchObject({ authMethod: 'client_secret_post', grantTypes: ['authorization_code', 'refresh_token'], responseTypes: ['code', 'token'], scopePresent: true, scopeExpected: false, hasClientSecret: true });
+  expect(JSON.stringify(diagnostics)).not.toContain('never-retained-client-secret');
 });
 it('escapes browser-visible client identity and never exposes pending state without its nonce', async () => {
   const client = await (await register(redirectUri, { client_name: '<script>alert(1)</script>' })).json();

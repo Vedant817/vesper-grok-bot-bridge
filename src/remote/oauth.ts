@@ -25,6 +25,30 @@ const stateSchema = z.object({ version: z.literal(1), clients: z.array(clientSch
 type State = z.infer<typeof stateSchema>;
 type Pending = { id: string; nonce: string; clientId: string; clientName?: string; params: AuthorizationParams; expiresAt: number; redirect?: string; approving?: boolean };
 type Code = { clientId: string; redirectUri: string; challenge: string; expiresAt: number };
+type OAuthObservation = {
+  method: string; path: string; status: number;
+  registration?: { bodyStage: 'parsed' | 'unavailable'; authMethod?: string; grantTypes?: string[]; responseTypes?: string[]; scopePresent?: boolean; scopeExpected?: boolean; hasClientSecret?: boolean; redirectUris?: { protocol: string; hostname?: string; hasQuery?: boolean; hasFragment?: boolean; hasCredentials?: boolean }[] };
+};
+const observedPaths = new Set(['/authorize', '/register', '/token', '/revoke', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/mcp', '/authorization/status', '/owner/pending', '/owner/clients', '/owner/revoke-client', '/owner/approve', '/owner/diagnostics']);
+const observedEnum = (value: unknown, choices: readonly string[]) => typeof value !== 'string' ? 'missing' : choices.includes(value) ? value : 'unknown';
+function registrationObservation(body: unknown): NonNullable<OAuthObservation['registration']> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { bodyStage: 'unavailable' };
+  const value = body as Record<string, unknown>;
+  const types = (input: unknown, choices: readonly string[]) => Array.isArray(input) ? input.slice(0, 8).map(item => observedEnum(item, choices)) : undefined;
+  return {
+    bodyStage: 'parsed', authMethod: observedEnum(value.token_endpoint_auth_method, ['none', 'client_secret_basic', 'client_secret_post', 'private_key_jwt', 'tls_client_auth']),
+    grantTypes: types(value.grant_types, ['authorization_code', 'refresh_token', 'client_credentials']), responseTypes: types(value.response_types, ['code', 'token', 'id_token']),
+    scopePresent: Object.hasOwn(value, 'scope'), scopeExpected: value.scope === scope, hasClientSecret: Object.hasOwn(value, 'client_secret'),
+    redirectUris: Array.isArray(value.redirect_uris) ? value.redirect_uris.slice(0, 8).map(input => {
+      try {
+        if (typeof input !== 'string' || input.length > 2048) throw new Error();
+        const url = new URL(input), protocol = observedEnum(url.protocol, ['https:', 'http:']);
+        // Never retain credentials, callback paths, query strings, fragments or opaque URI payloads.
+        return { protocol, ...(protocol === 'unknown' ? {} : { hostname: url.hostname.slice(0, 253) }), hasQuery: url.search !== '', hasFragment: input.includes('#'), hasCredentials: Boolean(url.username || url.password) };
+      } catch { return { protocol: 'invalid' }; }
+    }) : undefined,
+  };
+}
 
 /** Public OAuth endpoints use the SDK; owner approval remains local and private. */
 export async function createRemoteOAuth(options: { origin: string; secret: string; home: string }): Promise<{ router: RequestHandler; verify(token: string): Promise<AuthInfo> }> {
@@ -118,6 +142,17 @@ export async function createRemoteOAuth(options: { origin: string; secret: strin
   };
   const router = express.Router();
   const usedOwnerNonces = new Set<string>();
+  const observations: OAuthObservation[] = [];
+  router.use((req, res, next) => {
+    const requestedPath = req.originalUrl.split('?')[0];
+    const path = observedPaths.has(requestedPath) ? requestedPath : 'other';
+    const method = observedEnum(req.method, ['GET', 'POST', 'DELETE', 'OPTIONS', 'HEAD', 'PUT', 'PATCH']);
+    res.once('finish', () => {
+      observations.push({ method, path, status: res.statusCode, ...(path === '/register' && method === 'POST' ? { registration: res.locals.remoteRegistrationObservation ?? registrationObservation(req.body) } : {}) });
+      if (observations.length > 32) observations.splice(0, observations.length - 32);
+    });
+    next();
+  });
   router.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
   router.use((_req, res, next) => {
     const json = res.json.bind(res);
@@ -139,6 +174,7 @@ export async function createRemoteOAuth(options: { origin: string; secret: strin
     next();
   });
   router.get('/owner/pending', (_req, res) => { prune(); res.json([...pending.values()].filter(item => !item.redirect).map(item => ({ id: item.id, clientId: item.clientId, clientName: item.clientName, redirectUri: item.params.redirectUri, expiresAt: item.expiresAt, scopes: [scope] }))); });
+  router.get('/owner/diagnostics', (_req, res) => res.json({ observations }));
   router.get('/owner/clients', (_req, res) => res.json(state.clients.map(client => ({ clientId: client.client_id, clientName: client.client_name, redirectUris: client.redirect_uris, issuedAt: client.client_id_issued_at, scopes: [scope] }))));
   router.post('/owner/revoke-client', express.json({ limit: '1kb' }), async (req, res) => {
     const clientId = req.body?.clientId;
@@ -177,8 +213,14 @@ export async function createRemoteOAuth(options: { origin: string; secret: strin
   });
   // Validate the raw strings before the SDK URL schema canonicalizes them.
   router.post('/register', express.json({ limit: '16kb' }), (req, res, next) => {
+    // Snapshot only allowlisted facts before RFC 7591 supported-metadata negotiation.
+    res.locals.remoteRegistrationObservation = registrationObservation(req.body);
     const redirects: unknown = req.body?.redirect_uris;
     if (!Array.isArray(redirects) || redirects.some(value => typeof value !== 'string' || !validRedirect(value))) { res.status(400).json({ error: 'invalid_client_metadata' }); return; }
+    // Registration advertises requested preferences; return the actual supported
+    // public-client contract. Authorization still requires S256 and local consent.
+    req.body = { ...req.body, token_endpoint_auth_method: 'none', grant_types: ['authorization_code'], response_types: ['code'], scope };
+    delete req.body.client_secret; delete req.body.client_secret_expires_at;
     next();
   });
   router.use(mcpAuthRouter({ provider, issuerUrl: origin, resourceServerUrl: new URL(resource), scopesSupported: [scope], resourceName: 'Local coding agent bridge' }));
