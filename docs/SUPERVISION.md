@@ -55,7 +55,7 @@ grok-agent-bridge call agent_monitor
 
 Provider, model and canonical directory must match the binding. A new independent task needs a new key. Select an owner-enrolled imported session with `agent_attach`, then use its returned `sessionId` to bind it with `agent_dispatch`. The bridge does not guess the latest unrelated conversation or attach to arbitrary terminal processes.
 
-Dispatch receipts persist before native mutations. Concurrent requests serialize; repeat IDs return the original session. A prepared start is reconciled against its retained bridge request ID and exact original fingerprint. An unresolved operation blocks further dispatches for that task, including new request IDs. A continuation with uncertain delivery is never replayed automatically; owner reconciliation of the original native session and receipt is required while the bridge is stopped. Routing records are bounded at 1,000 bindings/receipts and fail closed at capacity; archive them only with the bridge stopped, preserving receipts for requests that might still be retried.
+Dispatch receipts persist before native mutations. Concurrent requests serialize; repeat IDs return the original session. A prepared start is reconciled against its retained bridge request ID and exact original fingerprint. An unresolved operation blocks further dispatches for that task, including new request IDs, and blocks direct start/attach/respond/follow-up/resume tools. Independent routed tasks remain available. A continuation with uncertain delivery is never replayed automatically; owner reconciliation of the original native session and receipt is required while the bridge is stopped. Known pre-send validation rejections are retained as rejected receipts; corrected input may use a fresh request ID. Routing records are bounded at 1,000 bindings/receipts and fail closed at capacity; archive them only with the bridge stopped, preserving receipts for requests that might still be retried.
 
 The caller repeatedly:
 
@@ -67,9 +67,13 @@ The caller repeatedly:
 
 `agent_monitor` classifies redacted failures as authentication, rate limit, quota, context, transport, policy, or unknown. These are diagnostic hints, not authorization to retry. Resolve authentication through native login. Respect documented resets and owner budgets. Do not rotate accounts/keys, buy credits, increase permissions, change models, or replay an uncertain mutation to get around a failure. Failed sessions keep native IDs and worktrees for inspection; automated recovery from terminal provider failures is not implemented.
 
+Unacknowledged shutdown retains a durable `executionUncertain` ownership marker. Cancel cannot clear it or report ordinary completion, resume/finish are blocked, and an import cannot attach another controller to the same native session or worktree. The owner must reconcile the native process and retained state; silence or a missing local worker reference is not proof that execution stopped.
+
 ## Supported boundaries and current evidence
 
 Research checked 22 October 2026. T3 source evidence is pinned to sibling local main `ab6be13d438abeace7617e8d789d59cf2e880f42`, especially `docs/user/outside-agents.md`, `docs/operations/connect-setup.md`, `McpOAuth.ts`, and `AcpMcpStdioBridge.ts`. The unrelated sibling checkout was not changed.
+
+The requested [Hona/mesh assessment](MESH.md) treats it as a possible remote transport companion. It is not installed or used to bypass this bridge's session and permission boundaries.
 
 - [Codex app-server](https://learn.chatgpt.com/docs/app-server) provides explicit threads, resume, events, approvals and cancellation. [ChatGPT authentication integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) has deployment restrictions; a local open-source integration does not authorize a hosted credential proxy.
 - [Claude headless CLI](https://code.claude.com/docs/en/headless) and [Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) provide supported automation. This repository still uses a handwritten bidirectional CLI control adapter; public SDK migration and installed-version compatibility remain unverified. Unsupported question batches/multiselect escalate rather than inventing an answer. Follow [Claude compliance guidance](https://code.claude.com/docs/en/legal-and-compliance) for the actual deployment/authentication mode.
