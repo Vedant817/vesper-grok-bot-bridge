@@ -2,21 +2,19 @@
 
 Launch and supervise **background coding CLIs without T3 Code** using the [standalone setup](docs/STANDALONE.md). Grok Bot connects over authenticated HTTPS/OAuth; this wrapper runs the selected local worker through ACP or its native API. Local MCP hosts can use stdio.
 
-For **Grok Bot controlling T3 Code**, start with the [native MCP quickstart](docs/T3_CONNECT_QUICKSTART.md) and [copyable bot role](docs/T3_BOT_INSTRUCTIONS.md). T3 already provides the HTTPS MCP server: add its public T3 Connect URL as a native Grok Bot connector and approve OAuth. No bridge installation, terminal communication, or xAI API key is required for that route. This is an unofficial community integration, not vendor certification.
-
-Build a shareable documentation kit with `npm run pack:onboarding`. Recipients extract it and follow the guide; nothing needs executing. The [distribution guide](docs/DISTRIBUTION.md) also covers building the optional CLI package, checksums, and release limits. Downloads are built locally; no npm or public marketplace publication is implied.
-
-The coding host must remain awake and online with T3's backend/tunnel running. On the current Windows desktop setup, keep T3 Code running (minimized is fine). Grok Bot's desktop window can close when using its cloud-hosted native HTTPS connector. See the quickstart's availability table for service and mobile use.
-
-## Optional bridge for coding CLIs outside T3
-
-For background CLI control **without T3 Code**, follow the [standalone setup](docs/STANDALONE.md). Local MCP clients use stdio; Grok Bot's cloud connector requires the wrapper's authenticated HTTPS gateway. Native CLI processes run locally through ACP or their supported native APIs.
-
 Grok Bot can supervise installed coding agents through this portable MCP bridge: choose a directory, provider and model; start or enter a session; answer questions and permissions; review work; send corrections; and finish only with passing verification. Grok Bot supplies the reasoning through its own subscription. The bridge does **not** require an `XAI_API_KEY`.
 
 Start with the [portable bridge setup and Grok Bot instructions](docs/BRIDGE.md) and [owner configuration example](examples/bridge.json). Native adapters support Codex app-server, OpenCode/ACP, Grok Build/ACP and Claude Code stream JSON, with optional T3 Code MCP discovery. [General ACP enrollment and actual live results](docs/CLI_CONNECTIONS.md) cover maintained Codex/Claude adapters and Google's standalone Antigravity ACP server. Installing an application alone does not establish authentication or session control.
 
-The worker directory is a runtime argument, constrained by owner-enrolled repositories. Product code contains no required checkout path or dependency on a generated report. Grok Bot's local-command permission or a compatible MCP connection is still required to reach the machine; a cloud Bot cannot reach desktop localhost by installation alone.
+The worker directory is a runtime argument, constrained by owner-enrolled repositories. Product code contains no required checkout path or dependency on a generated report. The coding host must remain awake and online with the managed bridge and HTTPS tunnel running. A cloud Bot cannot reach desktop localhost by installation alone. Native login and Grok Bot's own approval policy still apply.
+
+Build the installable CLI package and checksums using the [distribution guide](docs/DISTRIBUTION.md). Downloads are built locally; no npm or public marketplace publication is implied. This is an unofficial community integration, not vendor certification.
+
+## Optional T3 Code route
+
+For Grok Bot controlling T3 Code, use the [native MCP quickstart](docs/T3_CONNECT_QUICKSTART.md) and [copyable bot role](docs/T3_BOT_INSTRUCTIONS.md). T3 already provides the HTTPS MCP server, so that route does not require this bridge. Keep T3's backend/tunnel running on the coding host when using that route.
+
+`npm run pack:onboarding` builds a separate documentation-only T3 kit. Recipients extract it and follow the guide; it contains no CLI runtime. Grok Bot's cloud-hosted HTTPS connector does not depend on its desktop window remaining visible.
 
 ## Managed installation
 

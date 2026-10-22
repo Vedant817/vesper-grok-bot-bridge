@@ -18,6 +18,8 @@ Recipients should compare the download's SHA-256 with a checksum obtained from a
 
 ## Optional multi-CLI MCP bridge package
 
+This is the runtime download for background coding CLIs without T3. Follow [standalone setup](STANDALONE.md) after installation to enroll ACP providers and the HTTPS/OAuth gateway. The documentation-only T3 kit does not include this runtime.
+
 Users who want direct native CLI adapters outside T3 can install the existing CLI/MCP package. Maintainers build it from a checkout with locked dependencies:
 
 ```sh

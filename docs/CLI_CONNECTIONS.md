@@ -71,9 +71,30 @@ Enrollment performs only ACP v1 initialization, validates an explicitly selected
 
 An empty model list means the native session validates the exact requested model; it does not mean every model exists. `available:true` plus an ACP handshake is transport evidence. Discovery explicitly reports `authentication:"not_checked"`. Only a successful real turn proves execution access.
 
-Use the official [Antigravity ACP guide](https://antigravity.google/docs/ide/extensions/zed/) and [publisher registry entry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json) to obtain/enroll its standalone server. The tested native Grok Bot path uses T3's existing Antigravity integration. Standalone bridge enrollment of that server has not been exercised here.
+Use the official [Antigravity ACP guide](https://antigravity.google/docs/ide/extensions/zed/) and [publisher registry entry](https://github.com/agentclientprotocol/registry/blob/main/antigravity-acp/agent.json) to obtain/enroll its standalone server. Google's standalone ACP server was enrolled and exercised directly through the bridge, independently of T3.
+
+## Standalone Grok Bot results, 23 October 2026
+
+The installed Grok Bot connected through the bridge's own HTTPS/OAuth MCP gateway and launched background ACP workers. It read deliberately incorrect responses and sent corrective instructions to the same retained session. No T3 thread or visible terminal carried these tasks.
+
+| CLI/model | Observed result |
+| --- | --- |
+| Codex ACP `gpt-6-luna` | Two turns; Grok Bot corrected 293 to 292. |
+| Antigravity `gemini-3.8-flash-low` | Two turns; corrected 229 to 228. |
+| Cline `cohere/north-mini-code:free` | Two turns; corrected 580 to 579. |
+| OpenCode `opencode/glm-5.3-flash-free` | Free usage limit reached on the first turn; stopped without substitution or retry. |
+| Grok Build | Previously observed HTTP 402 balance exhaustion; inference was not repeated. |
+| Claude Code | Excluded at the owner's request. |
+
+The four new probe sessions were cancelled, with no pending input or worktree changes. Native Grok Bot approval cards required individual approval, including for some read calls: this is successful assisted supervision, not acceptance of fully unattended operation. These response probes do not by themselves certify file editing or repository verification. See [standalone setup and evidence](STANDALONE.md).
+
+A separate Codex ACP coding exercise used the same gateway: Grok Bot requested a deliberate `n*n+4` draft, ran the immutable owner-configured `node --test` verifier, read its actual `4 !== 3` failure, and corrected the same native session to `n*n+3`. Reverification passed one test covering five inputs. Git evidence showed only the implementation file changed; tests and package configuration stayed unchanged. This is a small real coding/verification exercise, not certification of arbitrary repositories or other providers' editing behavior.
 
 ## Live results on this machine, 22 October 2026
+
+Subsequent owner-authorized checks used **background CLI processes**, without T3 as transport: Codex ACP completed two turns, Cline ACP completed a turn with the free `cohere/north-mini-code:free` model, and Google's signed standalone Antigravity ACP1.4.1 authenticated via its supported personal OAuth method and created a session. Antigravity's cold initialize took about14seconds, so bounded discovery now allows up to30seconds. No provider credentials were copied from T3.
+
+Grok Bot separately performed response-driven review through the native T3 connector: Codex and Antigravity corrected a deliberately wrong draft in the same thread; free OpenCode `opencode/glm-5.3-flash-free` needed two corrections and then returned the accepted answer. Grok Build's HTTP402 balance failure was observed and stopped without another turn. These no-edit probes had clean worktrees when checked for Codex, Antigravity and OpenCode. Claude was excluded from subsequent testing at the owner's request.
 
 The owner authorized five isolated T3 test threads, each requesting a sentinel reply with no tools or file changes. Grok Bot initiated these through its native HTTPS MCP connector. Independent reads of their actual T3 transcripts showed:
 

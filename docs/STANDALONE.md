@@ -6,7 +6,7 @@ Grok Bot's command MCP connectors execute on its cloud computer, according to th
 
 ## Install once
 
-Requires Node22+, Git and a supported installed CLI. Build the package as described in [distribution](DISTRIBUTION.md), install it, then enroll a trusted repository with its real verifier:
+Requires Node.js 22+, Git and a supported installed CLI. Build the package as described in [distribution](DISTRIBUTION.md), install it, then enroll a trusted repository with its real verifier:
 
 ```powershell
 npm install -g ./grok-bot-mcp-agent-0.1.0.tgz
@@ -43,20 +43,38 @@ grok-agent-bridge remote approve EXACT_PENDING_REQUEST_ID
 grok-agent-bridge remote clients
 ```
 
-Approval grants `coding:operate` for the enrolled bridge: it can operate the owner-enrolled repositories and providers. Only approve a connector you intended to control them. Authorization requests expire after five minutes, codes after60seconds, and approved access tokens after30days. There are no refresh tokens; repeat approval after expiry. Temporary client registrations expire rather than permanently consuming approved-client slots. Approved client identities and revocations persist across daemon restart; tokens are signed and bound to this gateway's exact resource and client. Native MCP sessions cannot be borrowed by a different OAuth client.
+Approval grants `coding:operate` for the enrolled bridge: it can operate the owner-enrolled repositories and providers. Only approve a connector you intended to control them. Authorization requests expire after five minutes, codes after 60 seconds, and approved access tokens after 30 days. There are no refresh tokens; repeat approval after expiry. Temporary client registrations expire rather than permanently consuming approved-client slots. Approved client identities and revocations persist across daemon restart; tokens are signed and bound to this gateway's exact resource and client. Native MCP sessions cannot be borrowed by a different OAuth client.
 
 Revoke a connector with `grok-agent-bridge remote revoke EXACT_CLIENT_ID`. Stop the bridge and run `remote disable` to disable all remote exposure. A separate local gateway owner credential is protected with CurrentUser DPAPI on Windows and private file permissions elsewhere; it authenticates local approvals without appearing in argv, chat or command output. Disabling retains that credential privately; key rotation is not yet a CLI feature.
 
-For other clients that can safely store private Authorization headers, Windows `remote copy-token` transfers the owner bearer to the OS clipboard and clears it after60seconds if unchanged. This is a broad owner credential: never give it to an OAuth-only connector, ordinary conversation, or an untrusted client. Clipboard history/sync follows your OS settings. Grok Bot uses OAuth instead because its masked-secret workflow cannot reference a stored secret from connector headers.
+For other clients that can safely store private Authorization headers, Windows `remote copy-token` transfers the owner bearer to the OS clipboard and clears it after 60 seconds if unchanged. This is a broad owner credential: never give it to an OAuth-only connector, ordinary conversation, or an untrusted client. Clipboard history/sync follows your OS settings. Grok Bot uses OAuth instead because its masked-secret workflow cannot reference a stored secret from connector headers.
 
 ## Grok Bot instruction
+
+### Native approval policy
+
+OAuth enrollment does not change Grok Bot's Auto Review policy. The live connection also asked for approval on some individual connector calls, including read-only waits. The wrapper cannot remove those platform prompts, and tests that used an approved prompt are not proof of unattended execution.
+
+Grok Bot supports personal **Allow automatically** rules in Settings → General → Auto-review. Configure narrow rules yourself if appropriate, for example allowing only `agent_discover`, `agent_sessions`, `agent_read`, `agent_monitor` and `agent_wait` on this connector. Keep writes scoped to explicitly delegated tasks and enrolled repositories. Ask-first and administrator rules take precedence; automated review can still stop a matching action. Never disguise a mutating tool as read-only or disable security review globally. Follow the [official approval controls](https://docs.x.ai/grok-bot/approvals-security-and-privacy).
+
+Wait for each approved call to settle before sending another. In the live check, a new start was refused by the host while a previous permission card remained unresolved. Reconcile the bridge session list and retain the same request ID after a proven pre-send rejection; do not infer that a native operation failed merely because its host confirmation was interrupted.
 
 > Use the standalone coding-agent connector. Discover providers first. Start a background ACP worker for the exact enrolled directory, provider and model I name. Save its bridge and native session IDs. Use agent_wait/agent_read to inspect events. Resolve only delegated technical questions and scoped permissions; pause for human-only authentication/security requests. Evaluate each response against my task, send corrections using agent_followup in the same session, and verify actual work with agent_verify before agent_finish. Respect quota and model errors. Never replay uncertain starts, rotate accounts, increase budgets, or choose another model without instruction. Cancel the session when a bounded connection test is complete.
 
 `remote status` distinguishes configuration, protected credential availability, local daemon state and startup observation. `listening` and `tunnel:started` mean local initialization/startup survival, not public reachability or continuous tunnel health. After a network/tunnel failure, reconcile the original worker; do not resubmit its task. The remote HTTP endpoint has bounded bodies/sessions and authentication on every request, but does not provide an OS sandbox or multi-user authorization.
 
+If enrollment fails before the approval page, use `remote diagnostics` locally. It retains at most 32 sanitized observations: route/status and allowlisted registration preferences, never raw request bodies, query values, headers, codes or tokens. Registration negotiates the supported public-client metadata even if a hosted client requests secret authentication or refresh tokens; the response still grants neither, and authorization still requires PKCE and local approval.
+
 ## Evidence and limits
 
 Repository tests exercise real SDK HTTP discovery/calls, malformed authentication and Host/Origin boundaries, separate credentials, daemon restart and cancellation during remote startup. Windows tunnel fixtures verify owned process-tree cleanup. They do not establish live public reachability or Grok Bot enrollment.
 
-Earlier live Grok Bot response-based supervision through T3 corrected Codex, Antigravity and a free OpenCode model; Grok Build hit its balance limit and was stopped. Direct background Codex ACP and free Cline ACP inference also passed. These are separate observations, not proof that every provider is connected through the standalone public gateway. Claude account testing was excluded at the owner's request. Live standalone results must be recorded separately.
+The final serial suite passed **338 tests across 31 files**, with strict TypeScript checks and build passing. A hosted TestSprite backend run passed the public endpoint's authentication, metadata, unsafe callback, unknown-client, owner-route and Origin checks. It received no private keys, worker prompts or native credentials and does not certify authenticated worker supervision or reboot behavior.
+
+On 23 October 2026, the installed Grok Bot completed OAuth enrollment against this gateway and performed two-turn response review through standalone background Codex ACP, Antigravity ACP and free Cline ACP sessions. Each incorrect draft was corrected in the same native session. OpenCode's free model reported its usage limit and was cancelled; Grok Build's previously established balance failure was not retried. All four new response-probe sessions were cancelled with clean worktrees. Claude was excluded at the owner's request. See [the provider matrix](CLI_CONNECTIONS.md#standalone-grok-bot-results-23-october-2026).
+
+These live calls used individual native Grok Bot approval prompts. They establish assisted connector/session control, not fully unattended acceptance. Scheduled startup is configured on the tested Windows host; physical reboot, app-closed operation and non-Windows startup remain unverified.
+
+The separate Codex coding exercise completed two turns: a deliberately wrong implementation failed the immutable verifier, Grok Bot corrected the same native session, and verification passed one test covering five inputs. Only the implementation file changed. Grok Bot then called `agent_finish` with the current passing evidence; an independent read confirmed `finished`, no pending input and the unchanged native session ID.
+
+After an explicit daemon stop/start, Grok Bot successfully read the enrolled provider catalog and retained finished evidence without reconnecting or repeating OAuth approval. A read overlapping startup first failed with a transport error; once the daemon was healthy, a read-only retry succeeded. Availability errors during startup do not authorize replaying mutations. This restart check does not establish physical reboot acceptance.
