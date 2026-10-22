@@ -22,11 +22,11 @@ async function boot(home?: string) {
   home ??= await mkdtemp(join(tmpdir(), 'remote-oauth-independent-')); if (!homes.includes(home)) homes.push(home);
   const oauth = await createRemoteOAuth({ origin, secret, home });
   const host = await serveRemote({ origin, token: secret, oauth, createServer: () => new Server({ name: 'qa', version: '1' }, { capabilities: {} }) }); active.push(host);
-  const register = () => fetch(host.url + '/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_name: 'QA', redirect_uris: [redirect], token_endpoint_auth_method: 'none' }) });
+  const register = (metadata: Record<string, unknown> = {}) => fetch(host.url + '/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_name: 'QA', redirect_uris: [redirect], token_endpoint_auth_method: 'none', ...metadata }) });
   return { home, oauth, host, register };
 }
-async function token(context: Awaited<ReturnType<typeof boot>>) {
-  const client = await (await context.register()).json() as { client_id: string };
+async function token(context: Awaited<ReturnType<typeof boot>>, metadata: Record<string, unknown> = {}) {
+  const client = await (await context.register(metadata)).json() as { client_id: string };
   const params = new URLSearchParams({ client_id: client.client_id, redirect_uri: redirect, response_type: 'code', code_challenge_method: 'S256', code_challenge: createHash('sha256').update(verifier).digest('base64url'), resource: origin + '/mcp' });
   const html = await (await fetch(context.host.url + '/authorize?' + params)).text();
   const poll = html.match(/fetch\('([^']+)'/)![1];
@@ -41,6 +41,19 @@ function owner(context: Awaited<ReturnType<typeof boot>>, path: string, body?: u
   const method = body === undefined ? 'GET' : 'POST';
   return fetch(context.host.url + path, { method, headers: { ...signOwnerRequest(secret, { method, path, body }), 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
+
+it('completes locally approved PKCE after confidential-client negotiation and retains only original sanitized diagnostics', async () => {
+  const context = await boot(), marker = 'QA_SECRET_STATE_MUST_NOT_BE_RETAINED';
+  const issued = await token(context, { token_endpoint_auth_method: 'client_secret_post', grant_types: ['authorization_code', 'refresh_token'], response_types: ['code', 'token'], scope: marker, client_secret: marker, client_name: marker });
+  const info = await context.oauth.verify(issued);
+  expect(info.scopes).toEqual(['coding:operate']);
+  const diagnostics = await (await owner(context, '/owner/diagnostics')).json() as { observations: { registration?: { authMethod: string; grantTypes: string[]; scopePresent: boolean; scopeExpected: boolean; hasClientSecret: boolean } }[] };
+  const registration = diagnostics.observations.find(item => item.registration)?.registration;
+  expect(registration).toMatchObject({ authMethod: 'client_secret_post', grantTypes: ['authorization_code', 'refresh_token'], scopePresent: true, scopeExpected: false, hasClientSecret: true });
+  expect(JSON.stringify(diagnostics)).not.toContain(marker);
+  expect(JSON.stringify(diagnostics)).not.toContain(issued);
+  expect(JSON.stringify(diagnostics)).not.toContain(secret);
+});
 
 it('does not permit another OAuth client to delete an existing MCP session', async () => {
   const context = await boot(), first = await token(context), second = await token(context);
