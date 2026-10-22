@@ -1,5 +1,13 @@
 # Coding Agent Bridge for Grok Bot
 
+For **Grok Bot controlling T3 Code**, start with the [native MCP quickstart](docs/T3_CONNECT_QUICKSTART.md) and [copyable bot role](docs/T3_BOT_INSTRUCTIONS.md). T3 already provides the HTTPS MCP server: add its public T3 Connect URL as a native Grok Bot connector and approve OAuth. No bridge installation, terminal communication, or xAI API key is required for that route. This is an unofficial community integration, not vendor certification.
+
+Build a shareable documentation kit with `npm run pack:onboarding`. Recipients extract it and follow the guide; nothing needs executing. The [distribution guide](docs/DISTRIBUTION.md) also covers building the optional CLI package, checksums, and release limits. Downloads are built locally; no npm or public marketplace publication is implied.
+
+The coding host must remain awake and online with T3's backend/tunnel running. On the current Windows desktop setup, keep T3 Code running (minimized is fine). Grok Bot's desktop window can close when using its cloud-hosted native HTTPS connector. See the quickstart's availability table for service and mobile use.
+
+## Optional bridge for coding CLIs outside T3
+
 Grok Bot can supervise installed coding agents through this portable MCP bridge: choose a directory, provider and model; start or enter a session; answer questions and permissions; review work; send corrections; and finish only with passing verification. Grok Bot supplies the reasoning through its own subscription. The bridge does **not** require an `XAI_API_KEY`.
 
 Start with the [portable bridge setup and Grok Bot instructions](docs/BRIDGE.md) and [owner configuration example](examples/bridge.json). Native adapters support Codex app-server, OpenCode/ACP and Claude Code stream JSON, with optional T3 Code MCP discovery. Other CLIs can register a supported protocol adapter. Antigravity has no built-in session API adapter; installing an app alone does not establish control of it.

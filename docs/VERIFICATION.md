@@ -1,5 +1,18 @@
 # Verification and remaining acceptance gates
 
+## Distribution checkpoint: 2026-10-22
+
+- `npm run lint` passed both TypeScript checks. `npm pack --pack-destination build/releases --json` built the optional CLI package successfully; its 215 entries matched the package allowlist and included the native T3 guides and runtime lock. No runtime behavior changed, so the historical runtime test counts below were not rerun for this documentation/build change. The applicable TestSprite instructions exempt docs/build-config changes.
+- `npm run pack:onboarding` produced a documentation-only archive and SHA-256 sidecar. Fresh extraction found exactly five expected files, all five relative Markdown links resolved, the manifest had no scripts/dependencies and was private, and checks found no owner endpoint or home path. Independent QA reproduced these results in a separate disposable directory and found no concrete blockers.
+- Both downloads are local build artifacts, not an npm release or marketplace plugin. No public upload or registry publication occurred. The onboarding kit needs no installation; the optional CLI package has its own runtime and setup requirements.
+
+## Native Grok Bot connector checkpoint: 2026-10-22
+
+- The owner's public T3 endpoint returned HTTP 200 protected-resource metadata with a matching `/mcp` resource and authorization server. The endpoint is deliberately omitted from distributed documentation.
+- Through the installed Grok Bot UI, the Coding Agent Supervisor created a native `t3-connect` Remote HTTPS connector and presented an OAuth authorization card. The owner then reported that it worked. This is owner-reported authorization/connection success, not an independently captured new-thread/continuation or coding acceptance run.
+- The [native quickstart](T3_CONNECT_QUICKSTART.md) now takes precedence over historical statements below that only local-terminal handoff was established. It includes explicit read-only discovery and isolated new-thread/continuation acceptance prompts. The optional bridge's OAuth enrollment remains a separate flow.
+- Grok Bot's cloud connector does not require its desktop window to stay open. The coding host, T3 backend, Connect tunnel, and selected native providers must remain available. Windows background T3 service support, reboot persistence, mobile-triggered coding, and behavior across host sleep remain separate acceptance limits.
+
 ## Local desktop discovery checkpoint: 2026-10-22
 
 - The owner selected supervision on this computer first. Mesh remains optional and uninstalled; no remote execution, SSH enrollment, or shared OpenCode configuration changes were made.

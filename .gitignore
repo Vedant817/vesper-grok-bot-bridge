@@ -2,6 +2,7 @@
 node_modules/
 dist/
 build/
+/runtime-lock.json
 .turbo/
 
 # Environment & Secrets

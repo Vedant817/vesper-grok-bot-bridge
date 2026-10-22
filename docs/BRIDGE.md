@@ -1,5 +1,7 @@
 # Portable coding agent bridge
 
+For native Grok Bot control of T3 threads, follow the [T3 Connect quickstart](T3_CONNECT_QUICKSTART.md). T3 already provides the remote MCP server; this optional bridge and its setup commands are for the separate multi-CLI route.
+
 Grok Bot is the supervisor. The bridge exposes native coding sessions as MCP tools. Each request selects a provider, exact model and directory. The bridge does not call an xAI reasoning API and does not use Grok Build as a replacement for the Grok Bot application.
 
 See [persistent supervision and T3 Connect](SUPERVISION.md) for one-time OAuth enrollment, task-aware new/continue routing, monitoring, crash-recovery rules and provider boundaries.
@@ -28,7 +30,7 @@ grok-agent-bridge call agent_start @task.json
 
 The daemon starts automatically after Windows sign-in and is also started on demand by clients. Each proxy request discovers the current endpoint, so an already-open MCP client can reconnect after the daemon restarts. This does not automatically resume interrupted coding turns: inspect them and use `agent_resume`. The scheduled task runs as the current user without elevation; before-sign-in system-service startup is not provided.
 
-For Grok Bot, enable its approved local execution capability once, then give it the installed `GROK_BOT_INSTRUCTIONS.md` job description. It can use `grok-agent-bridge call ...` through the local terminal without handling bridge credentials. Grok Bot's application approval policy still applies. The installed MCP/CLI route is tested separately from the Grok Bot desktop handoff, which remains unverified.
+For Grok Bot's optional local-terminal route, enable its approved local execution capability once, then give it the installed `GROK_BOT_INSTRUCTIONS.md` job description. It can use `grok-agent-bridge call ...` through the local terminal without handling bridge credentials. Grok Bot's application approval policy still applies. The observed desktop handoff ran read-only bridge health/discovery using absolute Node/launcher paths after its inherited PATH failed; full Bot-driven coding supervision through this route remains unverified. Native T3 communication instead uses the separate HTTPS connector guide above.
 
 ```sh
 npm pack
