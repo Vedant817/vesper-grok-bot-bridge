@@ -10,7 +10,7 @@ export class AcpWorker extends RpcWorker {
   private active = false;
   private cancelling = false;
   private cancelTimer?: NodeJS.Timeout;
-  constructor(connect: (cwd: string) => Promise<Wire>, private readonly options: { model?: string; resumeId?: string } = {}) {
+  constructor(connect: (cwd: string) => Promise<Wire>, private readonly options: { model?: string; resumeId?: string; authMethodId?: string } = {}) {
     super(connect);
     this.lifetime.signal.addEventListener('abort', () => clearTimeout(this.cancelTimer), { once: true });
   }
@@ -19,6 +19,12 @@ export class AcpWorker extends RpcWorker {
     const rpc = await this.open(cwd);
     const init = await rpc.request('initialize', { protocolVersion: 1, clientCapabilities: {}, clientInfo: { name: 'grok-supervisor', version: '0.1.0' } });
     if (init.protocolVersion !== 1) throw new Error('Unsupported ACP protocol version');
+    // The owner selects a provider-advertised native authentication method.
+    // Discovery never signs in, and failure must not launch another session.
+    if (this.options.authMethodId) {
+      if (!Array.isArray(init.authMethods) || !init.authMethods.some((method: any) => method?.id === this.options.authMethodId)) throw new Error('Configured ACP authentication method is not advertised');
+      await rpc.request('authenticate', { methodId: this.options.authMethodId });
+    }
     if (this.options.resumeId && init.agentCapabilities?.loadSession !== true) throw new Error('ACP agent does not support session loading');
     const session = await rpc.request(this.options.resumeId ? 'session/load' : 'session/new', { ...(this.options.resumeId ? { sessionId: this.options.resumeId } : {}), cwd, mcpServers: [] });
     if (!this.options.resumeId && typeof session.sessionId !== 'string') throw new Error('ACP missing sessionId');

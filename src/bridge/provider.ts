@@ -9,13 +9,15 @@ import { StdioWire, Rpc, childEnvironment } from '../rpc.js';
 import { CodexWorker } from '../adapters/codex.js';
 import { AcpWorker } from '../adapters/acp.js';
 import { ClaudeWorker } from '../adapters/claude.js';
+import { probeAcp, type AcpDiscovery } from './acp-discovery.js';
 
 export interface Provider {
   id: string; label: string; models: string[]; available: boolean; reason?: string;
+  protocol?: 'acp' | 'codex' | 'claude'; acp?: AcpDiscovery;
   create(options: { model: string; resumeId?: string }): Worker;
 }
 /** Owner-controlled configuration; never accepted as an MCP tool argument. */
-export interface ProviderOverride { executable: string; args?: string[]; models?: string[]; env?: Record<string, string>; protocol?: 'acp' | 'codex' | 'claude' }
+export interface ProviderOverride { executable: string; args?: string[]; models?: string[]; env?: Record<string, string>; protocol?: 'acp' | 'codex' | 'claude'; authMethodId?: string }
 interface Launch { executable: string; args: string[] }
 async function exists(file: string): Promise<boolean> { try { await access(file, process.platform === 'win32' ? constants.F_OK : constants.X_OK); return true; } catch { return false; } }
 const npmPackages: Record<string, string> = { codex: '@openai/codex', claude: '@anthropic-ai/claude-code', opencode: 'opencode-ai' };
@@ -44,6 +46,7 @@ export async function resolveExecutable(name: string): Promise<Launch | undefine
     if (name === 'claude') names.push(join(homedir(), '.local', 'bin', 'claude.exe'));
     if (name === 'opencode') names.push(join(homedir(), '.bun', 'bin', 'opencode.exe'));
   }
+  if (!isAbsolute(name) && name === 'grok') names.push(join(homedir(), '.grok', 'bin', windows ? 'grok.exe' : 'grok'));
   for (const candidate of names) {
     if (!await exists(candidate)) continue;
     const suffix = extname(candidate).toLowerCase();
@@ -72,23 +75,30 @@ async function modelsFor(id: string, launch: Launch, env?: Record<string, string
 }
 /** An empty model catalog means native validation, never implicit model substitution. */
 export async function discoverProviders(overrides: Record<string, ProviderOverride> = {}): Promise<Provider[]> {
-  const providers = await Promise.all([...new Set(['codex', 'opencode', 'claude', ...Object.keys(overrides)])].map(async id => {
-    const override = overrides[id], launch = await resolveExecutable(override?.executable ?? id);
-    const unavailable = (reason: string): Provider => ({ id, label: id, models: [], available: false, reason, create() { throw new Error(reason); } });
+  const providers = await Promise.all([...new Set(['codex', 'opencode', 'claude', 'grok-build', ...Object.keys(overrides)])].map(async id => {
+    const label = ({ claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', 'grok-build': 'Grok Build', antigravity: 'Antigravity' } as Record<string, string>)[id] ?? id;
+    const override = overrides[id], launch = await resolveExecutable(override?.executable ?? (id === 'grok-build' ? 'grok' : id));
+    const unavailable = (reason: string): Provider => ({ id, label, models: [], available: false, reason, create() { throw new Error(reason); } });
     if (!launch) return unavailable('Executable unavailable; install provider or configure a native executable');
-    const protocol = override?.protocol ?? (id === 'codex' ? 'codex' : id === 'opencode' ? 'acp' : id === 'claude' ? 'claude' : undefined);
+    const protocol = override?.protocol ?? (id === 'codex' ? 'codex' : ['opencode', 'grok-build'].includes(id) ? 'acp' : id === 'claude' ? 'claude' : undefined);
     if (!protocol) return unavailable('Custom providers require an explicit supported protocol');
-    const models = override?.models ?? (override?.args || !['codex', 'opencode', 'claude'].includes(id) ? [] : await modelsFor(id, launch, override?.env));
-    return { id, label: id === 'claude' ? 'Claude Code' : id === 'codex' ? 'Codex' : 'OpenCode', models, available: true,
+    const args = override?.args ?? (id === 'grok-build' && protocol === 'acp' ? ['--permission-mode', 'default', 'agent', '--no-leader', 'stdio'] : protocol === 'codex' ? ['app-server'] : protocol === 'acp' ? ['acp'] : []);
+    let acp: AcpDiscovery | undefined;
+    if (protocol === 'acp') {
+      try { acp = await probeAcp(() => new StdioWire(launch.executable, [...launch.args, ...args], process.cwd(), override?.env)); }
+      catch { return { ...unavailable('ACP initialization failed or timed out; verify the configured executable, arguments and ACP v1 support'), protocol }; }
+    }
+    const nativeModelProtocol = id === 'codex' ? protocol === 'codex' : id === 'opencode' ? protocol === 'acp' : id === 'claude' && protocol === 'claude';
+    const models = override?.models ?? (override?.args || !nativeModelProtocol ? [] : await modelsFor(id, launch, override?.env));
+    return { id, label, models, available: true, protocol, ...(acp ? { acp } : {}),
       create(options: { model: string; resumeId?: string }): Worker {
         if (!options.model.trim() || (models.length && !models.includes(options.model))) throw new Error('Requested model unavailable');
-        const args = override?.args ?? (protocol === 'codex' ? ['app-server'] : protocol === 'acp' ? ['acp'] : []);
         if (protocol === 'claude') return new ClaudeWorker(async cwd => new StdioWire(launch.executable, [...launch.args, ...args, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'default', '--permission-prompt-tool', 'stdio', '--model', options.model, ...(options.resumeId ? ['--resume', options.resumeId] : [])], cwd, override?.env), options.resumeId);
         const connect = async (cwd: string) => new StdioWire(launch.executable, [...launch.args, ...args], cwd, override?.env);
-        return protocol === 'codex' ? new CodexWorker(connect, options) : new AcpWorker(connect, options);
+        return protocol === 'codex' ? new CodexWorker(connect, options) : new AcpWorker(connect, { ...options, authMethodId: override?.authMethodId ?? (id === 'grok-build' ? 'cached_token' : undefined) });
       }
     } satisfies Provider;
   }));
-  for (const [id, label] of [['antigravity', 'Antigravity'], ['grok-bot', 'Grok Bot']] as const) if (!providers.some(p => p.id === id)) providers.push({ id, label, models: [], available: false, reason: id === 'grok-bot' ? 'Grok Bot is the MCP supervisor client; no documented worker session-control API configured' : 'No documented session-control API configured', create() { throw new Error('Provider has no supported worker interface'); } });
+  for (const [id, label] of [['antigravity', 'Antigravity'], ['grok-bot', 'Grok Bot']] as const) if (!providers.some(p => p.id === id)) providers.push({ id, label, models: [], available: false, reason: id === 'grok-bot' ? 'Grok Bot is the MCP supervisor client; no documented worker session-control API configured' : 'Configure an owner-enrolled standalone ACP executable; app-private authentication is not reused', create() { throw new Error('Provider has no supported worker interface'); } });
   return providers;
 }

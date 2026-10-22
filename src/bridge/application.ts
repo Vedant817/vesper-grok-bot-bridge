@@ -8,7 +8,9 @@ import type { Services } from '../server.js';
 import { TaskRouter } from './router.js';
 
 export const bridgeOwnerSchema = bridgeConfigSchema.extend({
-  providers: z.record(z.object({ executable: z.string().min(1), args: z.array(z.string()).optional(), models: z.array(z.string()).optional(), env: z.record(z.string()).optional(), protocol: z.enum(['acp', 'codex', 'claude']).optional() }).strict()).default({}),
+  providers: z.record(z.object({ executable: z.string().min(1), args: z.array(z.string()).optional(), models: z.array(z.string()).optional(), env: z.record(z.string()).optional(), protocol: z.enum(['acp', 'codex', 'claude']).optional(), authMethodId: z.string().min(1).max(200).optional() }).strict().superRefine((provider, context) => {
+    if (provider.authMethodId && provider.protocol !== 'acp') context.addIssue({ code: 'custom', path: ['authMethodId'], message: 'Native authMethodId requires explicit ACP protocol' });
+  })).default({}),
   t3: t3ConnectionSchema.optional()
 }).strict();
 
