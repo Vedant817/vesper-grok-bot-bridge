@@ -8,6 +8,7 @@ The recommended community offering has **two Bot templates and two MCP connectio
 | Coding backend | T3 Code projects/threads | Background native CLI processes, usually ACP v1 stdio |
 | MCP server | Already supplied by T3 | `grok-bot-mcp-agent`, installed on the coding host |
 | Connection | T3 Connect HTTPS `/mcp` + T3 OAuth | Owner-controlled HTTPS `/mcp` + bridge OAuth |
+| Remote exposure | T3 Connect relay; no inbound bridge port | Owner-controlled HTTPS tunnel or Tailscale Funnel; Serve only for tailnet devices |
 | Main tool family | `t3_*` plus T3 capabilities | `agent_*` |
 | New work | Explicit T3 project/model and isolated worktree thread | Owner-enrolled Git repository/provider/model and isolated session |
 | Continuation | Exact T3 thread/run IDs | Exact bridge/native session IDs; native load support where needed |
@@ -17,6 +18,8 @@ The recommended community offering has **two Bot templates and two MCP connectio
 | Publisher source | [T3 template](../community/t3/README.md) | [CLI template](../community/cli/README.md) |
 
 The two `/mcp` URLs are different resources with different credentials. Approving one does not authorize the other. Neither requires an xAI API key when the installed Grok Bot supplies reasoning. The optional [legacy supervisor](LEGACY_SUPERVISOR.md) does require an API key and is a separate mode.
+
+Tailscale is an optional transport, not a third route. T3 Connect remains the preferred remote path for T3; a private Tailscale `Serve` address is not generally reachable from Grok Bot's cloud, and a public `Funnel` address still requires the bridge's OAuth. See [remote access and network safety](NETWORK_SECURITY.md).
 
 ## Combined template
 

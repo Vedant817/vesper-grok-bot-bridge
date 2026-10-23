@@ -7,6 +7,7 @@
 - [Standalone MCP setup](STANDALONE.md): install once, enroll repository/CLI, HTTPS gateway and OAuth.
 - [CLI/provider enrollment and live evidence](CLI_CONNECTIONS.md).
 - [Provider policy and account risks](PROVIDER_POLICY.md): authentication, subscriptions, hosted use, quotas and human-only steps.
+- [Remote access and network safety](NETWORK_SECURITY.md): T3 Connect vs Tailscale Serve/Funnel, public exposure, ACLs and rollback.
 - [Persistent bridge administration](BRIDGE.md) and [monitoring/recovery](SUPERVISION.md).
 
 ## Publishers and contributors

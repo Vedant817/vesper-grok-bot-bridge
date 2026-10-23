@@ -31,6 +31,8 @@ For a saved remote environment, open **Settings → Connections → that environ
 
 Use the public T3 Connect address for a cloud-hosted bot. `localhost`, `127.0.0.1`, LAN addresses, and private Tailscale addresses are not generally reachable from Grok Bot's cloud. **Create link** creates a pairing/authorization link; it is not a replacement for the MCP URL. Share only the base MCP URL, never a token, pairing code, or a URL containing an authorization secret.
 
+Tailscale Serve is not a substitute for this route: a private tailnet address is not generally reachable from Grok Bot's cloud, and T3 Connect already provides the relay and OAuth boundary. Do not expose T3's runtime or the bridge control channel through Funnel to work around a connection problem. See [remote access and network safety](NETWORK_SECURITY.md).
+
 ## 3. Add the native connector in Grok Bot
 
 Create or open a personal bot named, for example, **Coding Agent Supervisor**. Send:

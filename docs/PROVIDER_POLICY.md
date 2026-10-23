@@ -42,9 +42,13 @@ A proxy between the provider and this bridge is still subject to the same accoun
 | --- | --- |
 | A local proxy that pools multiple CLI accounts, rotates on quota/authentication failures, or exposes subscription OAuth as an API | **Do not integrate or recommend.** It conflicts with the stop-on-402/429 and no-rotation rules above. The reviewed CLIProxyAPI example configuration also documents Claude client-cloaking/fingerprint options; disguising a proxy as a first-party CLI is not a safety control. See [the CLIProxyAPI assessment](research/CLIPROXYAPI.md). |
 | A single owner using an official API key directly with the provider | Allowed where the provider's terms and plan permit it. Use the provider's documented API; this bridge does not require a proxy. |
+| Tailscale Funnel/Serve, Cloudflare Tunnel, ngrok or SSH | Permitted only as transport/administration layers that preserve this bridge's OAuth, Host/Origin checks, approvals, task identity and verification. They do not authorize a provider account, make shared use compliant, or turn a public endpoint into a private one. See [remote access and network safety](NETWORK_SECURITY.md). |
+| Mesh's general remote execution | Research-only; not a bot connector or a bypass around task identity, approvals or verification. See [the Mesh assessment](research/MESH.md). |
 | Cloaking, fingerprint impersonation or header/identity tricks to make a third-party client look like a first-party CLI | **Prohibited.** Do not add such behavior to an adapter, template or setup guide. |
 
 The license of a proxy project does not grant provider authorization. A proxy can add convenience, but it cannot make account sharing, quota evasion or subscription OAuth use compliant.
+
+Network privacy is not provider authorization. TLS, a VPN or a private tailnet protects the path to the bridge; it does not change which account may be used, what the plan permits, or whether a native approval is required.
 
 ## Implemented controls versus owner responsibilities
 

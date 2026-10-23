@@ -41,6 +41,8 @@ Read [the current provider-policy review](docs/PROVIDER_POLICY.md) before use or
 
 CLIProxyAPI-style multi-account pooling, automatic failover on quota/authentication errors, and client fingerprint cloaking are not integrated; the [assessment](docs/research/CLIPROXYAPI.md) explains the account and contract risk.
 
+A VPN or Tailscale tunnel protects the network path, not the provider account. See [remote access and network safety](docs/NETWORK_SECURITY.md) for T3 Connect, Tailscale Serve/Funnel and tunnel boundaries.
+
 The coding computer must stay awake and online with its selected backend and tunnel running. Persisted enrollment is not a promise of indefinite OAuth validity. Native Grok Bot approval cards can still interrupt unattended work; physical reboot and app-closed operation remain separate acceptance limits. [Live results and limitations](docs/CLI_CONNECTIONS.md), [verification history](docs/VERIFICATION.md).
 
 ## Develop and distribute
