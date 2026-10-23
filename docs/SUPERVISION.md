@@ -75,7 +75,7 @@ Unacknowledged shutdown retains a durable `executionUncertain` ownership marker.
 
 Research checked 22 October 2026. T3 source evidence is pinned to sibling local main `ab6be13d438abeace7617e8d789d59cf2e880f42`, especially `docs/user/outside-agents.md`, `docs/operations/connect-setup.md`, `McpOAuth.ts`, and `AcpMcpStdioBridge.ts`. The unrelated sibling checkout was not changed.
 
-The requested [Hona/mesh assessment](MESH.md) treats it as a possible remote transport companion. It is not installed or used to bypass this bridge's session and permission boundaries.
+The requested [Hona/mesh assessment](research/MESH.md) treats it as a possible remote transport companion. It is not installed or used to bypass this bridge's session and permission boundaries.
 
 - [Codex app-server](https://learn.chatgpt.com/docs/app-server) provides explicit threads, resume, events, approvals and cancellation. [ChatGPT authentication integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) has deployment restrictions; a local open-source integration does not authorize a hosted credential proxy.
 - [Claude headless CLI](https://code.claude.com/docs/en/headless) and [Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) provide supported automation. This repository still uses a handwritten bidirectional CLI control adapter; public SDK migration and installed-version compatibility remain unverified. Unsupported question batches/multiselect escalate rather than inventing an answer. Follow [Claude compliance guidance](https://code.claude.com/docs/en/legal-and-compliance) for the actual deployment/authentication mode.

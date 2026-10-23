@@ -18,6 +18,7 @@
   "files": [
     "dist",
     "README.md",
+    "CONTRIBUTING.md",
     "docs",
     "community",
     "examples",
@@ -36,7 +37,7 @@
     "check": "npm run lint && npm test && npm run build",
     "start": "node dist/index.js",
     "prepack": "npm run build && node scripts/prepare-package.mjs",
-    "pack:onboarding": "node scripts/package-onboarding.mjs",
+    "pack:onboarding": "node scripts/package-community.mjs",
     "pack:community": "node scripts/package-community.mjs"
   },
   "keywords": [

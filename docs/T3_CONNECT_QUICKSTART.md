@@ -8,7 +8,7 @@ Your phone or desktop → Grok Bot → HTTPS MCP + OAuth → T3 Connect
                                             T3 host → coding agents
 ```
 
-This guide and the [copyable bot instructions](T3_BOT_INSTRUCTIONS.md) form the downloadable onboarding kit. Extract the kit with your archive manager; nothing in it needs to be installed or executed. Each user connects their own environment and approves their own access. It contains no preconfigured endpoint, login, or credentials.
+Add the published T3 Coding Supervisor through Grok Bot Marketplace or its real template link, then follow this guide. No public template URL is currently configured by this repository. Publishers maintain its [profile and listing source](../community/t3/README.md); the source kit is not a required recipient download or a native import format. Each user connects their own environment and approves their own access. No template grants the creator's endpoint, login or credentials. See [route comparison](ROUTES.md) and [provider-policy review](PROVIDER_POLICY.md).
 
 ## 1. Prepare the coding host once
 

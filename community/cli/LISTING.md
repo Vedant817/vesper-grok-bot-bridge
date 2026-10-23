@@ -1,6 +1,6 @@
 # Community listing copy
 
-## Coding Agent Supervisor
+## CLI Coding Supervisor
 
 Let Grok Bot supervise your background coding CLI through your own MCP bridge: start a task in an enrolled Git repository, inspect responses, answer scoped technical questions, request improvements in the same session, and finish only after current verification passes.
 

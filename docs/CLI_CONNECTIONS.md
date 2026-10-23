@@ -41,10 +41,12 @@ For example, on Windows the two maintained adapters tested here were installed s
 
 ```powershell
 $adapterHome = Join-Path $env:LOCALAPPDATA 'GrokAgentBridge/adapters/acp'
-npm install --prefix $adapterHome --ignore-scripts --no-audit --no-fund --save-exact @agentclientprotocol/codex-acp@2.2.2 @agentclientprotocol/claude-agent-acp@0.94.0
+npm install --prefix $adapterHome --ignore-scripts --no-audit --no-fund --save-exact @agentclientprotocol/codex-acp@2.2.2
 ```
 
-These are reproducibility pins checked 22 October 2026, not a promise that they remain the newest or appropriate versions indefinitely. Review updates deliberately. `--ignore-scripts` skips package lifecycle scripts; it does not sandbox code when you later launch it. The Codex adapter includes a compatible Codex dependency; its documented `CODEX_PATH` option selects a different native binary. No credentials are passed through that option.
+This is a reproducibility pin checked 22 October 2026, not a promise that it remains the newest or appropriate version indefinitely. Review updates deliberately. `--ignore-scripts` skips package lifecycle scripts; it does not sandbox code when you later launch it. The Codex adapter includes a compatible Codex dependency; its documented `CODEX_PATH` option selects a different native binary. No credentials are passed through that option. For programmatic deployments, review the [API-key/enterprise authentication guidance](PROVIDER_POLICY.md) rather than assuming a subscription login grants every automation use.
+
+Claude is optional and excluded from model-turn acceptance here. Before installing an SDK-backed Claude ACP adapter, review [the separate Anthropic SDK and native-product requirements](PROVIDER_POLICY.md). Do not market Claude.ai subscription login as this integration's entitlement. Use supported authentication for the exact adapter/deployment or obtain provider approval; initialization alone does not establish policy or account readiness.
 
 With your bridge idle, inspect `agent_monitor`, reconcile any unfinished/uncertain sessions, and stop the bridge using its normal maintenance command. Provider enrollment refuses a running daemon; it does not kill live coding tasks to apply configuration:
 
@@ -54,12 +56,9 @@ grok-agent-bridge stop
 
 $taskNode = (Get-Command node -CommandType Application).Source
 $codexEntry = Join-Path $adapterHome 'node_modules/@agentclientprotocol/codex-acp/dist/index.js'
-$claudeEntry = Join-Path $adapterHome 'node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js'
 $codexArgs = ConvertTo-Json -Compress -InputObject @($codexEntry)
-$claudeArgs = ConvertTo-Json -Compress -InputObject @($claudeEntry)
 
 grok-agent-bridge provider add --id codex-acp --command $taskNode --args $codexArgs
-grok-agent-bridge provider add --id claude-acp --command $taskNode --args $claudeArgs
 grok-agent-bridge provider list
 grok-agent-bridge start
 grok-agent-bridge call agent_discover

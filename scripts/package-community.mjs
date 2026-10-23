@@ -33,17 +33,18 @@ let template;
 try {
   for (const directory of ['community', 'docs', 'examples']) await cp(join(root, directory), join(staging, directory), { recursive: true });
   await cp(join(root, 'LICENSE'), join(staging, 'LICENSE'));
-  await writeFile(join(staging, 'README.md'), `# Coding Agent Supervisor template kit\n\nOpen [the template guide](community/README.md), then [the profile](community/PROFILE.md) and [full role](docs/GROK_BOT_INSTRUCTIONS.md).\n\nExtract this documentation-only archive; do not install it with npm. It is not a native Grok Bot import file or marketplace listing. Each recipient separately installs the matching grok-bot-mcp-agent-${version}.tgz runtime and enrolls their own CLI, repository and HTTPS/OAuth connector. No code, credentials or configured endpoint are included.\n`);
+  await cp(join(root, 'CONTRIBUTING.md'), join(staging, 'CONTRIBUTING.md'));
+  await writeFile(join(staging, 'README.md'), `# Grok Bot template publisher sources\n\nOpen [the two-template guide](community/README.md): [T3 profile](community/t3/PROFILE.md) or [CLI profile](community/cli/PROFILE.md). Read [the route comparison](docs/ROUTES.md) and [provider policy](docs/PROVIDER_POLICY.md).\n\nExtract this documentation-only archive; do not install it with npm. It is not a native Grok Bot import file or marketplace listing. Publishers use it to prepare native shared templates. Ordinary recipients add the published Bot through Marketplace or a real template link. T3 users connect T3's own MCP; only standalone CLI users install grok-bot-mcp-agent-${version}.tgz and enroll their own repositories/providers and HTTPS/OAuth connection. No executable code, credentials or configured endpoint are included.\n`);
   await writeFile(join(staging, 'package.json'), JSON.stringify({
     name: 'grok-coding-supervisor-template', version, private: true, license: 'MIT',
-    description: 'Profile, role, listing copy and onboarding for a community Grok Bot template',
-    files: ['README.md', 'LICENSE', 'community', 'docs', 'examples'],
+    description: 'Publisher sources for separate T3 and standalone CLI Grok Bot templates',
+    files: ['README.md', 'CONTRIBUTING.md', 'LICENSE', 'community', 'docs', 'examples'],
   }, null, 2) + '\n');
   template = await checksum(pack(staging, true), 'bot-template-kit');
 } finally {
   // The exact absolute directory came from mkdtemp above, never from user input.
   await rm(staging, { recursive: true, force: true });
 }
-const manifest = { version, artifacts: [template, runtime], publication: { npm: false, marketplace: false, nativeTemplateLink: null } };
+const manifest = { version, artifacts: [template, runtime], publication: { npm: false, marketplace: false, nativeTemplateLinks: { t3: null, cli: null } } };
 await writeFile(join(output, 'community-release.json'), JSON.stringify(manifest, null, 2) + '\n');
 console.log(JSON.stringify(manifest, null, 2));
