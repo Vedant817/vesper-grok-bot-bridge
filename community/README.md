@@ -15,4 +15,6 @@ Two templates prevent confusing `t3_*` thread operations with the bridge's `agen
 
 The [official sharing flow](https://docs.x.ai/grok-bot/bots#share-a-bot) creates the link inside Grok Bot. The [official template guide](https://x.ai/bot/guides/templates-for-grok-bot) explains that custom MCP server code is not bundled with a template. Each recipient authorizes their own connection and native provider accounts.
 
+The [community overview](overview/README.md) holds the Excalidraw diagrams for introducing this project: the cloud-to-local bridge, the two routes, and the supervision loop. Those images are project documentation, not a social-network export.
+
 `npm run pack:community` builds the **publisher source kit** containing both template definitions, plus the standalone CLI/MCP runtime and checksums. It does not publish a Bot, install a connector, share accounts or create a marketplace listing. Follow [distribution](../docs/DISTRIBUTION.md) and [provider policy review](../docs/PROVIDER_POLICY.md) before release.

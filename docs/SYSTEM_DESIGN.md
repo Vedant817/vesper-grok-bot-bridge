@@ -300,7 +300,11 @@ Dependency versions above are declarations from package.json, not claims about t
 - **What remains human?** Account login, MFA, CAPTCHA, payment and native human-only approvals.
 - **What stays external?** Grok Bot reasoning, T3's relay internals, native provider cloud architecture and the project's chosen public tunnel.
 
-## Community post draft
+## Community overview
+
+Shareable diagrams for this open-source project are in [community/overview](../community/overview). The Mermaid sources in [diagrams](diagrams) stay the editable architecture record.
+
+## Community introduction
 
 > I built a TypeScript MCP bridge that lets Grok Bot supervise native coding agents. It supports explicit provider/model selection, retained native sessions, detached Git worktrees, crash-aware task routing and an evidence-based finish gate.
 >
@@ -308,7 +312,7 @@ Dependency versions above are declarations from package.json, not claims about t
 >
 > The interesting engineering problems were session identity, preventing duplicate instructions after uncertain failures, preserving native permissions, and rejecting stale verification evidence.
 
-Attach diagram 1 to the post; use diagrams 2-5 for a technical follow-up or interview. This is a draft only; nothing has been published.
+Use [the overview images](../community/overview) when introducing the project. Use Mermaid diagrams 2–5 for a technical follow-up.
 
 ## Source map and evidence limits
 
