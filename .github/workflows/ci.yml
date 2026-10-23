@@ -1,5 +1,8 @@
 name: Verify
 on: [push, pull_request]
+# Least privilege: checkout and package dry-run need nothing beyond reading the repo.
+permissions:
+  contents: read
 concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
