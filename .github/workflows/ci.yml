@@ -6,8 +6,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The current Windows Server 2025 image stalls in Windows PowerShell module discovery.
-        os: [ubuntu-latest, windows-2022]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

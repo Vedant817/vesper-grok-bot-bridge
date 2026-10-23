@@ -9,5 +9,7 @@ export function powershellPath(): string {
 export function powershellEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
   for (const key of Object.keys(env)) if (/^PSModule(?:Path|AnalysisCachePath)$/i.test(key)) delete env[key];
+  // These short-lived helpers must not contend with the parent's on-disk module cache.
+  env.PSModuleAnalysisCachePath = 'NUL';
   return env;
 }

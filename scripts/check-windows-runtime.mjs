@@ -19,7 +19,7 @@ for (const [name, script, encoded] of probes) {
       : ['-Command', script])], { env: powershellEnvironment(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', settled = false;
     const finish = status => { if (settled) return; settled = true; clearTimeout(timer); resolve(status); };
-    const timer = setTimeout(() => { child.kill(); finish('timed out'); }, 15000);
+    const timer = setTimeout(() => { child.kill(); finish(`timed out (marker=${output === marker}, exit=${child.exitCode})`); }, 15000);
     child.stdout.on('data', data => { output += data; });
     child.stderr.resume();
     child.stdin.on('error', () => {});
