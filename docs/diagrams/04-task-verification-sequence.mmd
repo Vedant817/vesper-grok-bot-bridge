@@ -1,0 +1,61 @@
+sequenceDiagram
+  actor Owner
+  participant Bot as Grok Bot supervisor
+  participant MCP as MCP tools
+  participant Router as TaskRouter
+  participant State as Durable JSON state
+  participant Bridge as BridgeService
+  participant Worker as Native worker
+  participant Git as Git worktree
+  participant Verify as Owner verifier
+  Owner->>Bot: Task, exact provider/model and repository
+  Bot->>MCP: agent_discover
+  MCP-->>Bot: Availability, models, protocols and limitations
+  Bot->>MCP: agent_dispatch(taskKey, requestId, instruction)
+  MCP->>Router: Validate exact task identity
+  Router->>State: Persist prepared receipt before mutation
+  alt New task
+    Router->>Bridge: Start with stable request identity
+    Bridge->>Git: Detached linked worktree from committed HEAD
+    Bridge->>State: Persist session snapshot before native execution
+    Bridge->>Worker: Initialize and submit task in worktree
+  else Existing completed or interrupted task
+    Router->>Bridge: Continue exact retained session
+    Bridge->>Worker: Follow-up / native resume where supported
+  else Active or terminal task
+    Router-->>Bot: Observe, instructionSubmitted = false
+  end
+  Router->>State: Persist known outcome and session binding
+  loop Bounded supervision
+    Bot->>MCP: agent_wait / agent_read / agent_monitor
+    MCP-->>Bot: Redacted activity, cursor, pending input and status
+    Worker-->>Bridge: Technical question or permission event
+    Bridge->>Bridge: Deterministic policy and human-only classification
+    opt Input can be delegated
+      Bot->>MCP: agent_respond(sessionId, requestId)
+      MCP->>Worker: Valid answer or permitted scoped response
+    end
+    opt Credentials or human-only approval
+      Bot-->>Owner: Native human handoff
+    end
+  end
+  Worker-->>Bridge: Turn completed, awaiting_review
+  Bot->>MCP: agent_verify
+  MCP->>Verify: Run owner-configured executable and arguments
+  Verify-->>Bridge: Exit status and redacted output
+  Bridge->>Git: Capture HEAD and change fingerprint
+  Bridge->>State: Persist evidenceId and contentHash
+  MCP-->>Bot: Verification and change evidence
+  alt Review finds gaps or verification fails
+    Bot->>MCP: agent_followup with concrete corrections
+    MCP->>Worker: Continue same native session
+  else Reviewed and passing
+    Bot->>MCP: agent_finish(sessionId, evidenceId)
+    MCP->>Bridge: Check latest passing evidence and current fingerprint
+    Bridge->>Worker: Bounded shutdown
+    Bridge->>Git: Recheck fingerprint after shutdown
+    Bridge->>State: Mark finished only if evidence still matches
+    MCP-->>Bot: Accepted, retain worktree and evidence
+  end
+  Note over Router,Worker: An uncertain native submission is inspected, never blindly replayed
+  Note over Bridge,Git: Finish does not commit, merge, push or delete the worktree

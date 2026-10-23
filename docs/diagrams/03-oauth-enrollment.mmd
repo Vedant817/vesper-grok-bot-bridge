@@ -1,0 +1,27 @@
+sequenceDiagram
+  actor Owner
+  participant Bot as Grok Bot MCP client
+  participant Edge as Owner HTTPS ingress
+  participant Auth as Bridge OAuth server
+  participant CLI as Local owner CLI
+  participant Store as Owner-local OAuth state
+  Bot->>Edge: Discover protected /mcp resource and OAuth metadata
+  Edge->>Auth: Forward to loopback listener
+  Auth-->>Bot: Authorization, registration and token endpoints
+  Bot->>Auth: Register callback and initiate authorization with PKCE S256
+  Auth-->>Owner: Pending connector, callback and local approval requirement
+  Owner->>CLI: Inspect pending request, approve exact request ID
+  CLI->>Auth: Loopback-only signed owner approval
+  Auth->>Store: Persist approved client
+  Auth-->>Bot: Redirect to registered callback with authorization code
+  Bot->>Auth: Exchange code + PKCE verifier
+  Auth-->>Bot: Scoped access token, no refresh-token grant
+  Bot->>Edge: POST /mcp with Bearer credential
+  Edge->>Auth: Forward HTTP to 127.0.0.1
+  Auth->>Auth: Validate Host, Origin if supplied, token, scope and resource
+  alt Authorized
+    Auth-->>Bot: MCP initialization / tool response
+  else Expired, revoked or invalid
+    Auth-->>Bot: 401, explicit reauthorization required
+  end
+  Note over Owner,Store: Bridge access does not authenticate Codex, Claude, ACP providers or T3

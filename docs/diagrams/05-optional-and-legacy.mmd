@@ -1,0 +1,36 @@
+flowchart TB
+  subgraph Advanced["Optional bridge-to-T3 integration"]
+    Bridge["Bridge provider discovery"]
+    Catalog["T3 orchestrator_capabilities<br/>Exact provider instance and model"]
+    Connect["src/connect<br/>OAuth PKCE enrollment + credential reference"]
+    Official["Preferred official T3<br/>acp-mcp-bridge over local stdio"]
+    SDK["Fallback MCP SDK HTTPS transport"]
+    T3["T3 MCP endpoint<br/>Local configured endpoint or remote T3 Connect"]
+    Thread["T3Worker<br/>Thread launch / wait / read / send / interrupt<br/>Pending questions; native permission boundary"]
+    Bridge --> Catalog
+    Bridge --> Connect
+    Connect -->|"Launcher available"| Official
+    Connect -->|"Launcher absent"| SDK
+    Official -->|"HTTPS /mcp"| T3
+    SDK -->|"HTTPS /mcp"| T3
+    Catalog <--> T3
+    T3 <--> Thread
+  end
+  subgraph Legacy["Legacy API-key supervisor - optional separate mode"]
+    Entry["run / run-plan / serve-stdio / serve-http"]
+    App["application + Supervisor<br/>One active run; finite turns, events and deadline"]
+    Policy["Deterministic permission policy<br/>Unknown or human-only operations stop"]
+    Reasoner["GrokReasoner<br/>Zod-validated answers and evaluation"]
+    XAI["xAI Responses API<br/>HTTPS POST /v1/responses<br/>Explicit model + XAI_API_KEY; store:false"]
+    Workers["Worker adapters<br/>ACP stdio / Codex stdio or WebSocket<br/>T3 MCP / optional node-pty terminal"]
+    Memory[("Bounded redacted working memory<br/>SHA-256 addressed JSON cold storage")]
+    Evidence["Owner verifier + Git change hashes<br/>TypeScript AST symbol summaries"]
+    Entry --> App
+    App --> Policy
+    App <--> Reasoner
+    Reasoner <-->|"Node fetch + API bearer"| XAI
+    App <--> Workers
+    App <--> Memory
+    App --> Evidence
+    Evidence -->|"Verifier passes AND reasoner accepts"| Done["Complete and retain worktree"]
+  end

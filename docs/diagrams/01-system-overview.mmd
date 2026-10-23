@@ -1,0 +1,32 @@
+flowchart TB
+  Owner["Owner / developer"]
+  Bot["Grok Bot / Keystone templates<br/>Supervision, technical answers, review"]
+  Owner -->|"Task and acceptance criteria"| Bot
+  subgraph T3Route["Route A - T3 product boundary"]
+    Relay["T3 Connect<br/>HTTPS /mcp + T3 OAuth"]
+    T3["T3 Code MCP server<br/>t3_* tools, projects and threads"]
+    T3Workers["T3-configured coding providers<br/>Native sessions and workspaces"]
+    Relay <-->|"T3-managed relay connection"| T3
+    T3 <-->|"T3-owned orchestration"| T3Workers
+  end
+  subgraph CLIRoute["Route B - owner coding computer"]
+    Gateway["Owner HTTPS ingress<br/>Reverse proxy / tunnel / optional Funnel"]
+    Bridge["Standalone MCP bridge<br/>Node.js 22+, TypeScript, Express 5<br/>MCP SDK + Zod"]
+    Router["TaskRouter + BridgeService<br/>Exact provider/model, session IDs<br/>Durable receipts and bounded monitoring"]
+    Native["Native workers<br/>Codex app-server / Claude stream-json<br/>ACP v1: OpenCode, Grok Build, enrolled adapters"]
+    Work["Detached Git worktrees<br/>Owner verifier + SHA-256 change evidence"]
+    State[("Owner-local files<br/>JSON snapshots, routing receipts<br/>Protected credentials and runtime records")]
+    Gateway <-->|"HTTP to 127.0.0.1<br/>Bridge OAuth bearer on /mcp"| Bridge
+    Bridge <-->|"Validated agent_* calls"| Router
+    Router <-->|"Child-process stdio protocols"| Native
+    Native <-->|"Repository edits and project checks"| Work
+    Router <-->|"Persist / recover"| State
+    Router -->|"Verify then finish"| Work
+  end
+  Bot <-->|"MCP over HTTPS<br/>T3 OAuth credential"| Relay
+  Bot <-->|"MCP over HTTPS<br/>Separate bridge OAuth credential"| Gateway
+  Native <-->|"Provider-managed network / authentication"| APIs["Selected provider services<br/>Native CLI owns account authentication"]
+  classDef core fill:#dbeafe,stroke:#2563eb,color:#10254a
+  classDef external fill:#f1f5f9,stroke:#64748b,color:#172033
+  class Bridge,Router core
+  class Owner,Bot,APIs,Relay,T3,T3Workers external

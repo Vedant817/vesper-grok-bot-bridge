@@ -16,6 +16,7 @@
 - [Build and distribute](DISTRIBUTION.md): CLI archive, publisher source kit, hashes and release checklist.
 - [Contributor guide and directory map](../CONTRIBUTING.md).
 - [Architecture](ARCHITECTURE.md), [protocol contracts](PROTOCOLS.md), [verification history and limits](VERIFICATION.md).
+- [System design diagrams](SYSTEM_DESIGN.md): Mermaid overview, networking, OAuth, task lifecycle, technology inventory and interview notes.
 - [Legacy API-key supervisor](LEGACY_SUPERVISOR.md): optional advanced mode, separate from the Grok Bot templates.
 - [Mesh research](research/MESH.md): optional future transport assessment, not a dependency.
 - [CLIProxyAPI assessment](research/CLIPROXYAPI.md): why account pooling, quota failover and client cloaking are not integrated.

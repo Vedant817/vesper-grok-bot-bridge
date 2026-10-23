@@ -1,6 +1,8 @@
-# Coding Agent Bridge for Grok Bot
+# Keystone Agent Bridge
 
 Use Grok Bot to supervise coding agents: start a task, inspect the agent's response, resolve delegated technical input, request improvements in the same session, and review real verification before accepting work.
+
+Explore the [system design diagrams, technology stack and architecture walkthrough](docs/SYSTEM_DESIGN.md).
 
 ## Choose your setup
 

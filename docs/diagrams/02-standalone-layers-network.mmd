@@ -1,0 +1,35 @@
+flowchart TB
+  Cloud["Grok Bot cloud MCP client"]
+  Local["Local MCP host<br/>Codex / Claude / OpenCode client"]
+  Admin["Owner CLI<br/>setup / doctor / start / stop / remote approve"]
+  subgraph Edge["Owner-controlled network edge"]
+    TLS["HTTPS ingress - typically TCP 443<br/>Reverse proxy / tunnel / optional Tailscale Funnel<br/>TLS termination"]
+  end
+  subgraph Host["Single-owner coding host"]
+    Remote["Remote listener - Express + MCP SDK<br/>127.0.0.1:configured port, e.g. 43189<br/>Streamable HTTP /mcp"]
+    Auth["OAuth authorization code + PKCE S256<br/>Local owner approval, coding:operate scope<br/>Host / Origin / resource / expiry checks"]
+    Proxy["Managed MCP proxy<br/>agent_* tools only"]
+    Stdio["connect command<br/>MCP SDK stdio transport"]
+    Daemon["Managed daemon - local MCP server<br/>127.0.0.1:dynamic port<br/>Bearer-auth /mcp; legacy /sse + /messages"]
+    Control["Local control IPC<br/>Windows named pipe / Unix socket<br/>HMAC-SHA256 authenticated requests and responses"]
+    Tools["MCP tool registration + Zod schemas"]
+    Service["TaskRouter + BridgeService<br/>Serialized mutations, request correlation<br/>Session lifecycle, monitoring, redaction"]
+    Adapters["Worker interface / provider discovery<br/>Codex | Claude | ACP"]
+    Processes["Native CLI child processes<br/>shell:false, hidden Windows processes"]
+    Files[("Owner-managed filesystem<br/>Config, DPAPI credential blob on Windows<br/>Sessions, routing.json, worktrees")]
+    Remote --> Auth --> Proxy
+    Stdio --> Proxy
+    Proxy <-->|"Loopback HTTP + local bearer"| Daemon
+    Daemon --> Tools --> Service --> Adapters
+    Adapters <-->|"stdin/stdout framed JSON"| Processes
+    Service <-->|"Filesystem APIs + Git subprocesses"| Files
+    Control <-->|"Health / stop"| Daemon
+    Admin <-->|"Local authenticated IPC"| Control
+    Admin -->|"Signed local owner requests"| Auth
+    Admin -->|"Enrollment / installation"| Files
+  end
+  Cloud <-->|"HTTPS + OAuth bearer<br/>MCP JSON-RPC"| TLS
+  TLS <-->|"HTTP over loopback<br/>Public Host preserved or supported loopback rewrite"| Remote
+  Local <-->|"stdin/stdout JSON-RPC"| Stdio
+  Processes <-->|"Provider-owned outbound connectivity"| Provider["Provider backend<br/>Credentials stay in native CLI"]
+  Private["Optional Tailscale Serve<br/>Tailnet devices only + bridge OAuth"] -.-> TLS
