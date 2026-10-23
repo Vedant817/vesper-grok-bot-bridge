@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { powershellEnvironment, powershellPath } from '../dist/managed/powershell.js';
+import { powershellEnvironment, powershellPath, powershellScript } from '../dist/managed/powershell.js';
 
 if (process.platform !== 'win32') process.exit(0);
 
@@ -8,7 +8,8 @@ const marker = 'helper-ready';
 const probes = [
   ['startup', `[Console]::Out.Write('${marker}')`, false],
   ['encoded stdin', `[Console]::Out.Write([Console]::In.ReadToEnd())`, true],
-  ['in-box modules', `Get-Command ConvertFrom-Json,Get-ScheduledTask -ErrorAction Stop | Out-Null; [Console]::Out.Write('${marker}')`, false],
+  ['utility module', powershellScript(`ConvertFrom-Json '{"ready":true}' | Out-Null; [Console]::Out.Write('${marker}')`), false],
+  ['scheduler module', powershellScript(`Get-Command Get-ScheduledTask -ErrorAction Stop | Out-Null; [Console]::Out.Write('${marker}')`, ['Microsoft.PowerShell.Utility', 'ScheduledTasks']), false],
 ];
 let failed = false;
 for (const [name, script, encoded] of probes) {

@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { ManagedPaths } from './paths.js';
-import { powershellEnvironment, powershellPath } from './powershell.js';
+import { powershellEnvironment, powershellPath, powershellScript } from './powershell.js';
 export { startManaged } from './runtime.js';
 
 const run = promisify(execFile);
@@ -53,7 +53,7 @@ export async function installAutostart(paths: ManagedPaths): Promise<{ mode: str
   if (process.platform !== 'win32') return { mode: 'unsupported', warning: 'Automatic logon startup currently supports Windows only' };
   await writeFile(daemonScript(paths), encodeVbs(daemonVbs(paths)), { mode: 0o600 });
   try {
-    await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', startupScript(paths)], { env: powershellEnvironment(), windowsHide: true, timeout: 20000 });
+    await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', powershellScript(startupScript(paths), ['Microsoft.PowerShell.Utility', 'ScheduledTasks'])], { env: powershellEnvironment(), windowsHide: true, timeout: 20000 });
     return { mode: 'scheduled-task' };
   } catch {
     const file = startupFile();
@@ -77,7 +77,7 @@ export async function autostartStatus(paths: ManagedPaths): Promise<'scheduled-t
     // Enumerate with -ErrorAction Stop: a query failure must be distinguishable from a
     // missing task. Ending with a successful statement keeps Windows PowerShell's
     // $?-derived exit code at zero when the task is simply absent.
-    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Write-Output 'present'}; Write-Output 'checked'`], { env: powershellEnvironment(), windowsHide: true, timeout: 20000 });
+    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', powershellScript(`$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Write-Output 'present'}; Write-Output 'checked'`, ['Microsoft.PowerShell.Utility', 'ScheduledTasks'])], { env: powershellEnvironment(), windowsHide: true, timeout: 20000 });
     return stdout.includes('present') ? 'scheduled-task' : 'disabled';
   } catch { return 'unknown'; }
 }
@@ -87,7 +87,7 @@ export async function removeAutostart(paths: ManagedPaths): Promise<{ removed: b
   const description = literal(`Managed by GrokAgentBridge: ${paths.home}`);
   let schedulerError: unknown, removed = false;
   try {
-    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false; Write-Output 'removed'}; Write-Output 'checked'`], { env: powershellEnvironment(), windowsHide: true, timeout: 20000 });
+    const { stdout } = await run(powershellPath(), ['-NoProfile', '-NonInteractive', '-Command', powershellScript(`$ErrorActionPreference='Stop'; $task=@(Get-ScheduledTask -TaskPath '\\' -ErrorAction Stop | Where-Object { $_.TaskName -eq ${literal(startupTaskName(paths))} -and $_.Description -eq ${description} }); if($task.Count -gt 0){Unregister-ScheduledTask -TaskName ${literal(startupTaskName(paths))} -Confirm:$false; Write-Output 'removed'}; Write-Output 'checked'`, ['Microsoft.PowerShell.Utility', 'ScheduledTasks'])], { env: powershellEnvironment(), windowsHide: true, timeout: 20000 });
     if (stdout.includes('removed')) removed = true;
   } catch (error) { schedulerError = error; }
   const file = startupFile();
