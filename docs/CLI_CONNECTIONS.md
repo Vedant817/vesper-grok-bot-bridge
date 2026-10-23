@@ -82,7 +82,7 @@ The installed Grok Bot connected through the bridge's own HTTPS/OAuth MCP gatewa
 | Codex ACP `gpt-6-luna` | Two turns; Grok Bot corrected 293 to 292. |
 | Antigravity `gemini-3.8-flash-low` | Two turns; corrected 229 to 228. |
 | Cline `cohere/north-mini-code:free` | Two turns; corrected 580 to 579. |
-| OpenCode `opencode/glm-5.3-flash-free` | Free usage limit reached on the first turn; stopped without substitution or retry. |
+| OpenCode `opencode/glm-5.3-flash-free` | Initially usage-blocked and stopped. A later explicitly requested demo completed two turns: deliberate draft `7*8 = 55`, then same-session correction to `56`, followed by cancellation and a clean worktree. |
 | Grok Build | Previously observed HTTP 402 balance exhaustion; inference was not repeated. |
 | Claude Code | Excluded at the owner's request. |
 

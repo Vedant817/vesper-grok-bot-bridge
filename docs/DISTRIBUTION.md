@@ -1,6 +1,25 @@
 # Build and distribute downloads
 
-Two different downloads serve different users. Neither includes user configuration or credentials. This repository is an unofficial community integration; it does not distribute Grok Bot, T3 Code, provider subscriptions, or an approved marketplace plugin.
+The community distribution has two parts: a Grok Bot template kit and an installable CLI/MCP runtime. Neither includes user configuration or credentials. This repository is an unofficial community integration; it does not distribute Grok Bot, T3 Code, provider subscriptions, or an approved marketplace plugin.
+
+## Community pair: Bot template and CLI/MCP runtime
+
+With locked dependencies installed (`npm ci`), build both downloads:
+
+```sh
+npm run pack:community
+```
+
+The default output is `build/releases`; pass `npm run pack:community -- /absolute/output/directory` for another location.
+
+| Download | Recipient action |
+| --- | --- |
+| `grok-coding-supervisor-template-0.1.0.tgz` | Extract and open `package/README.md`. It contains the clean Bot profile, role, listing copy, native sharing steps and acceptance prompts. It is documentation, not an npm install or native import format. |
+| `grok-bot-mcp-agent-0.1.0.tgz` | Install with `npm install -g ./grok-bot-mcp-agent-0.1.0.tgz`, then follow standalone setup. It supplies the background CLI launcher and MCP tools. |
+
+Each archive has a `.sha256` sidecar. `community-release.json` records filenames, hashes, included files and the fact that nothing has been published. The template kit's private manifest has no scripts or dependencies. All connector URLs, CLI login, provider/model choices, repository paths, verifier and OAuth approvals belong to the recipient.
+
+Follow the [template preparation guide](../community/README.md) before publishing through Grok Bot's native Share menu. Check **View template details**; do not share a QA Bot containing private context or the author's connector. A platform-generated template link is required for Add to Grok Bot. This build neither generates that link nor establishes marketplace placement. Custom MCP code is installed separately, as explained in the [official template guide](https://x.ai/bot/guides/templates-for-grok-bot).
 
 ## Native T3 onboarding kit (recommended for Grok Bot + T3)
 
@@ -16,7 +35,7 @@ To build into another directory, use `npm run pack:onboarding -- /absolute/outpu
 
 Recipients should compare the download's SHA-256 with a checksum obtained from a trusted release channel. A checksum beside a modified download is not publisher authentication.
 
-## Optional multi-CLI MCP bridge package
+## Build only the multi-CLI MCP bridge package
 
 This is the runtime download for background coding CLIs without T3. Follow [standalone setup](STANDALONE.md) after installation to enroll ACP providers and the HTTPS/OAuth gateway. The documentation-only T3 kit does not include this runtime.
 

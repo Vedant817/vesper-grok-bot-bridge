@@ -10,6 +10,8 @@ The worker directory is a runtime argument, constrained by owner-enrolled reposi
 
 Build the installable CLI package and checksums using the [distribution guide](docs/DISTRIBUTION.md). Downloads are built locally; no npm or public marketplace publication is implied. This is an unofficial community integration, not vendor certification.
 
+For community distribution, run `npm run pack:community` to build **both** the [Grok Bot template kit](community/README.md) and CLI/MCP runtime with checksums. The template kit includes the profile, full role, listing copy and recipient acceptance steps. Each recipient installs the runtime and connects their own HTTPS/OAuth endpoint; native template publication is a separate reviewed step.
+
 ## Optional T3 Code route
 
 For Grok Bot controlling T3 Code, use the [native MCP quickstart](docs/T3_CONNECT_QUICKSTART.md) and [copyable bot role](docs/T3_BOT_INSTRUCTIONS.md). T3 already provides the HTTPS MCP server, so that route does not require this bridge. Keep T3's backend/tunnel running on the coding host when using that route.
