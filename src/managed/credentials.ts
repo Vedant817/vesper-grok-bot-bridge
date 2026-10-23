@@ -13,6 +13,9 @@ import { powershellEnvironment, powershellPath, powershellScript } from './power
 const decode = `$v=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([Console]::In.ReadToEnd()).Trim()))`;
 const scripts = {
   acl: `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${decode}|ConvertFrom-Json; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $d=[System.IO.DirectoryInfo]::new($v.path); $acl=$d.GetAccessControl(); $acl.SetOwner($sid); $acl.SetAccessRuleProtection($true,$false); foreach($rule in @($acl.Access)){ [void]$acl.RemoveAccessRuleAll($rule) }; foreach($id in @($sid,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))){ $r=New-Object Security.AccessControl.FileSystemAccessRule($id,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($r) }; $d.SetAccessControl($acl)`,
+  // Per-file tamper check: the owner must be this user and every Allow ACE must resolve to
+  // this user or SYSTEM, so a same-user swap granting other principals read fails closed.
+  check: `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${decode}|ConvertFrom-Json; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $f=[System.IO.FileInfo]::new($v.path); $acl=$f.GetAccessControl(); if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw 'owner'}; foreach($r in @($acl.Access)){ if($r.AccessControlType -eq 'Allow' -and $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin @($sid,'S-1-5-18')){throw 'permissions'} }`,
   protect: `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; ${decode}; $b=[Text.Encoding]::UTF8.GetBytes($v); [Console]::Out.Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`,
   unprotect: `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; ${decode}; $b=[Convert]::FromBase64String($v); [Console]::Out.Write([Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`
 };
@@ -83,6 +86,12 @@ export async function readCredential(paths: ManagedPaths): Promise<string> {
   const info = await lstat(paths.token);
   if (!info.isFile() || info.isSymbolicLink() || info.size > 65536) throw new Error('Invalid managed credential file');
   if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) throw new Error('Managed credential permissions must be private');
+  if (process.platform === 'win32') {
+    // lstat cannot see a swapped file whose ACL grants other principals read. Fail closed as
+    // invalid so ensureCredential's rotation path replaces the tampered credential.
+    try { await windowsHelper(scripts.check, encode(JSON.stringify({ path: paths.token }))); }
+    catch { throw new Error('Invalid managed credential'); }
+  }
   const value = await readFile(paths.token, 'utf8');
   const prefix = 'grok-bridge-dpapi-v1\n';
   let token = value;
@@ -127,9 +136,15 @@ export async function ensureCredential(paths: ManagedPaths): Promise<string> {
     try { await link(temporary, paths.token); }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      // Hard links are unavailable on some filesystems; rename is atomic within the
-      // owner-only home and still guarantees that a credential exists after rotation.
-      if (code !== 'EEXIST') await rename(temporary, paths.token);
+      if (code !== 'EEXIST') {
+        // Hard links are unavailable on some filesystems; rename is atomic within the
+        // owner-only home. Never overwrite: a concurrent rotation may already have
+        // published a valid credential, and the final read below returns it.
+        let absent = false;
+        try { await lstat(paths.token); }
+        catch (statError) { if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError; absent = true; }
+        if (absent) await rename(temporary, paths.token);
+      }
     }
   } finally { await unlink(temporary).catch(() => {}); }
   return readCredential(paths);

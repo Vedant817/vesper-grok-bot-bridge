@@ -128,23 +128,38 @@ describe('standalone remote HTTP boundary', () => {
       expect(created).toBe(0);
     } finally { await host.close(); }
   });
-  it('caps live sessions and releases them through explicit termination and close', async () => {
+  it('caps sessions per principal and lets the owner reclaim the least-recently-active foreign session', async () => {
     let closed = 0;
-    const host = await serveRemote({ origin, token, createServer: () => { const server = factory(); server.onclose = () => { closed++; }; return server; } });
-    const ids: string[] = [];
+    const host = await serveRemote({ origin, token, oauth: { router: express.Router(), verify: async supplied => ({
+      token: supplied, clientId: supplied === 'client-b' ? 'b' : 'a', scopes: ['coding:operate'], resource: new URL(origin + '/mcp')
+    }) }, createServer: () => { const server = factory(); server.onclose = () => { closed++; }; return server; } });
+    const open = async (authorization: string) => {
+      const response = await fetch(host.url + '/mcp', { method: 'POST', headers: { ...headers, Authorization: `Bearer ${authorization}` }, body: JSON.stringify(initialize) });
+      expect(response.status).toBe(200); const id = response.headers.get('mcp-session-id')!; await response.text(); return id;
+    };
+    const list = { jsonrpc: '2.0', id: 2, method: 'tools/list' };
     try {
-      for (let i = 0; i < 16; i++) {
-        const response = await fetch(host.url + '/mcp', { method: 'POST', headers, body: JSON.stringify(initialize) });
-        expect(response.status).toBe(200); ids.push(response.headers.get('mcp-session-id')!); await response.text();
-      }
-      const capped = await fetch(host.url + '/mcp', { method: 'POST', headers, body: JSON.stringify(initialize) });
-      expect(capped.status).toBe(429);
-      expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...headers, 'mcp-session-id': ids[0]! } })).status).toBe(200);
-      const replacement = await fetch(host.url + '/mcp', { method: 'POST', headers, body: JSON.stringify(initialize) });
-      expect(replacement.status).toBe(200); await replacement.text();
-      expect((await fetch(host.url + '/mcp', { headers: { ...headers, 'mcp-session-id': ids[0]! } })).status).toBe(404);
+      const own: string[] = [];
+      for (let i = 0; i < 8; i++) own.push(await open(token));
+      // Eight live sessions are the per-principal budget, even for the private owner.
+      expect((await fetch(host.url + '/mcp', { method: 'POST', headers, body: JSON.stringify(initialize) })).status).toBe(429);
+      expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...headers, 'mcp-session-id': own[0]! } })).status).toBe(200);
+      const foreign: string[] = [];
+      for (let i = 0; i < 8; i++) foreign.push(await open('client-a'));
+      const other = await open('client-b');
+      // The table is full (7 owner + 8 client-a + 1 client-b). Refresh client-a's
+      // oldest session so FIFO eviction would pick foreign[0]; the LRU eviction
+      // must skip it and take foreign[1].
+      const refreshed = await fetch(host.url + '/mcp', { method: 'POST', headers: { ...headers, Authorization: 'Bearer client-a', 'mcp-session-id': foreign[0]! }, body: JSON.stringify(list) });
+      expect(refreshed.status).toBe(200); await refreshed.text();
+      expect(await open(token)).toBeTruthy();
+      // Other principals cannot displace anyone at the global cap.
+      expect((await fetch(host.url + '/mcp', { method: 'POST', headers: { ...headers, Authorization: 'Bearer client-a' }, body: JSON.stringify(initialize) })).status).toBe(429);
+      expect((await fetch(host.url + '/mcp', { method: 'POST', headers: { ...headers, Authorization: 'Bearer client-b' }, body: JSON.stringify(initialize) })).status).toBe(429);
+      expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...headers, Authorization: 'Bearer client-a', 'mcp-session-id': foreign[1]! } })).status).toBe(404);
+      expect((await fetch(host.url + '/mcp', { method: 'DELETE', headers: { ...headers, Authorization: 'Bearer client-a', 'mcp-session-id': foreign[0]! } })).status).toBe(200);
     } finally { await host.close(); }
-    expect(closed).toBe(17);
+    expect(closed).toBe(18);
   });
   it('releases malformed initialization and factory failures without leaking errors', async () => {
     let fail = true;

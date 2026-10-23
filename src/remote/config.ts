@@ -5,6 +5,14 @@ import { z } from 'zod';
 import { hardenHome } from '../managed/credentials.js';
 import type { ManagedPaths } from '../managed/paths.js';
 
+// Tunnel secrets must stay in the tunnel's own credential store, never in remote.json.
+// A bare token-like string is 32+ characters of the token alphabet with no path
+// separators, colon, or dot-with-extension, so hostnames and config paths pass.
+// UUID-shaped identifiers (e.g. `tunnel run <id>`) are names, not secrets.
+const credentialArg = (value: string): boolean =>
+  /(?:authtoken|--token(?:=|\s|$)|api[_-]?key|client[_-]?secret|password)/i.test(value) ||
+  (/^[A-Za-z0-9+/=_-]{32,}$/.test(value) && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
+
 export const remoteConfigSchema = z.object({
   origin: z.string().max(2048).refine(value => {
     try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && url.origin === value; }
@@ -13,7 +21,7 @@ export const remoteConfigSchema = z.object({
   port: z.number().int().min(1024).max(65535),
   tunnel: z.object({
     command: z.string().max(32768).refine(value => isAbsolute(value) && !/[\0\r\n]/.test(value), 'Tunnel command must be an absolute executable path'),
-    args: z.array(z.string().max(32768).refine(value => !value.includes('\0'))).max(128),
+    args: z.array(z.string().max(32768).refine(value => !value.includes('\0')).refine(value => !credentialArg(value), 'Tunnel credentials belong in the tunnel\'s own credential store, never in command arguments')).max(128),
   }).strict().optional(),
 }).strict();
 export type RemoteConfig = z.infer<typeof remoteConfigSchema>;

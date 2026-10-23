@@ -10,6 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+    # If a new Windows image stalls in PowerShell module discovery, pin windows-2022 (see commit history).
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

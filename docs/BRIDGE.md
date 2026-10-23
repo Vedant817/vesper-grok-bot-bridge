@@ -78,7 +78,7 @@ npm run check
 npm link
 ```
 
-Copy `examples/bridge.json` to a private owner configuration outside your repository. Replace its paths with your own absolute paths (Windows JSON may use `C:/...`). Add each repository under `roots`. `verify` must run that project's actual test/build gate. `scripts/verify.mjs` is a placeholder for your own real script, not a supplied always-pass check. Commands and environment values are trusted owner configuration, never MCP tool arguments. Keep credentials out of Git.
+Copy `examples/bridge.json` to a private owner configuration outside your repository. Replace its paths with your own absolute paths (Windows JSON may use `C:/...`). Add each repository under `roots`. `verify` must run that project's actual test/build gate. `scripts/verify.mjs` ships as a placeholder that always fails closed; replace it with this project's real verification gate before enrolling. Commands and environment values are trusted owner configuration, never MCP tool arguments. Keep credentials out of Git.
 
 The state directory must be outside and separate from enrolled repositories. New tasks create detached Git worktrees from committed HEAD; uncommitted source changes, dependencies and ignored files are not copied. The requested subdirectory must exist in committed HEAD. Install/build prerequisites through your existing project workflow before expecting tests to pass. Worktrees are retained; finishing does not commit, merge, push or delete them.
 

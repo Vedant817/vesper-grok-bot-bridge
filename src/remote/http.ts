@@ -11,7 +11,10 @@ export async function serveRemote(options: { origin: string; token: string; crea
   if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash || ![origin.origin, `${origin.origin}/`].includes(options.origin)) throw new Error('Remote origin must be an HTTPS origin');
   if (options.token.length < 32 || /[\r\n]/.test(options.token)) throw new Error('Remote token must contain at least 32 characters');
   const expected = createHash('sha256').update(`Bearer ${options.token}`).digest();
-  type Session = { server: Server; transport: StreamableHTTPServerTransport; principal: string; timer?: NodeJS.Timeout; closed: boolean };
+  type Session = { server: Server; transport: StreamableHTTPServerTransport; principal: string; lastSeen: number; timer?: NodeJS.Timeout; closed: boolean };
+  // One enrolled client may hold 8 live sessions; the owner reclaims the
+  // least-recently-active foreign session at the global cap instead of being refused.
+  const maxSessionsPerPrincipal = 8, maxSessionsTotal = 16;
   const sessions = new Map<string, Session>(), live = new Set<Session>();
   let closing = false, localHost = '';
   const dispose = async (session: Session) => {
@@ -64,11 +67,20 @@ export async function serveRemote(options: { origin: string; token: string; crea
     if (!session) {
       if (id !== undefined) { res.status(404).end(); return; }
       if (req.method !== 'POST' || req.body?.method !== 'initialize') { res.status(405).end(); return; }
-      if (live.size >= 16) { res.status(429).end(); return; }
+      let own = 0;
+      for (const other of live) if (other.principal === principal) own++;
+      if (own >= maxSessionsPerPrincipal) { res.status(429).end(); return; }
+      if (live.size >= maxSessionsTotal) {
+        if (principal !== 'private:owner') { res.status(429).end(); return; }
+        let victim: Session | undefined;
+        for (const other of live) if (other.principal !== principal && (!victim || other.lastSeen < victim.lastSeen)) victim = other;
+        if (!victim) { res.status(429).end(); return; }
+        void dispose(victim);
+      }
       try {
         const server = options.createServer();
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID, onsessioninitialized: assigned => { if (!session!.closed) sessions.set(assigned, session!); } });
-        session = { server, transport, principal, closed: false }; live.add(session);
+        session = { server, transport, principal, lastSeen: Date.now(), closed: false }; live.add(session);
         const current = session, previousClose = server.onclose;
         server.onclose = () => { try { previousClose?.(); } finally { void dispose(current); } };
         await server.connect(transport);
@@ -78,6 +90,7 @@ export async function serveRemote(options: { origin: string; token: string; crea
       }
     }
     clearTimeout(session.timer);
+    session.lastSeen = Date.now();
     const current = session;
     session.timer = setTimeout(() => { void dispose(current); }, 3_600_000); session.timer.unref();
     try {

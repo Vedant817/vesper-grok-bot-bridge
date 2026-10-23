@@ -32,9 +32,13 @@ T3 Connect is not interchangeable with a generic tunnel. `localhost`, `127.0.0.1
 - The configured origin must be an HTTPS origin. The incoming Host header must match that origin's host and port, or the exact loopback host and port.
 - OAuth uses PKCE and a local owner approval. The owner bearer credential is separate from native provider credentials.
 - Every MCP request is authenticated; bodies and sessions are bounded. OAuth discovery, registration and authorization endpoints are publicly reachable as required for enrollment; owner approval endpoints require a separate signed local request.
+- Live MCP sessions are bounded twice: at most 8 per principal and 16 in total. A principal that is at its own budget is refused with `429`. When the table is full, the owner's next session displaces the least-recently-active session belonging to a different principal instead of being refused; other principals are refused.
+- OAuth access-token signatures and owner-approval proofs use separate HKDF subkeys of the stored credential (`grok-remote-oauth-v1`, `grok-remote-owner-mac-v1`). The bearer credential itself is the stored master, so the on-disk format and the static bearer are unchanged, and access tokens issued before the separation keep working until they expire.
 - `remote status` reports configuration, protected credential availability, daemon state and local runtime. Its `publicReachability: not_checked` field is deliberate: it does not prove that a tunnel is reachable, healthy or public.
 
 A tunnel must preserve these controls. If a tunnel rewrites the public Host to a different host or port, configure the bridge with the exact public origin or use the supported loopback rewrite; do not disable Host or Origin checking to make the tunnel work.
+
+The owner approval endpoints additionally check a loopback Host, a loopback peer address and a same-origin Origin header. When traffic arrives through an owner-configured tunnel, those locality checks cannot distinguish tunnel traffic from other internet traffic: the tunnel process itself connects from loopback and rewrites the Host to the loopback endpoint. On that tunneled path, the signed owner proof — a fresh 32-hex nonce, a timestamp within 10 seconds, and an HMAC over the exact method, path and body using a dedicated HKDF subkey, with single-use nonce tracking — is the controlling gate. On the non-tunneled path, the same locality checks still isolate other local processes on the host from the owner endpoints.
 
 ## Tailscale Funnel: public ingress for the standalone bridge
 
@@ -113,7 +117,7 @@ Cloudflare Tunnel, ngrok, a VPS reverse proxy and similar services follow the sa
 - Use a stable HTTPS URL. Ephemeral URLs require reconfiguring both the bridge and the connector.
 - Configure the exact origin, including a non-default port. Preserve the public Host header or rewrite it to the exact loopback host and port the bridge accepts.
 - Disable request and body inspection. Authorization headers, task content and verification evidence are sensitive.
-- Keep tunnel credentials in the tunnel's native store, never in command arguments, chat, templates or logs.
+- Keep tunnel credentials in the tunnel's native store, never in command arguments, chat, templates or logs. The bridge enforces this at configuration save time: tunnel arguments that look like embedded credentials (token or authtoken flags, API keys, client secrets, passwords, or bare 32+-character token-like strings) are rejected.
 - Keep the bridge's OAuth and local approval in place. A tunnel's own access page or SSO does not replace them unless you have verified that it forwards the complete OAuth flow and preserves the exact origin.
 - Do not expose the control channel or provider CLIs alongside `/mcp`.
 
@@ -141,6 +145,9 @@ Cloudflare Tunnel, ngrok, a VPS reverse proxy and similar services follow the sa
 
 ## Limits
 
+- The MCP SDK's enrollment endpoints rate-limit by TCP peer address. Behind a tunnel every request arrives from the tunnel process and shares one bucket, so a remote flood can temporarily block `/authorize` and `/register` (enrollment only; `/mcp` is authenticated separately and unaffected). This is accepted and documented.
+- `remote copy-token` places the credential on the OS clipboard for up to 60 seconds before it self-clears; local processes can read the clipboard during that window.
+- On POSIX the owner and T3 credentials are plaintext files (mode `0600`) inside the owner-only `0700` home. Windows protects them with DPAPI CurrentUser. Either way, host-level compromise exposes them.
 - Funnel is beta, bandwidth-limited, and dependent on DNS/certificate propagation. It has no availability guarantee.
 - Funnel requires a platform that can run the Tailscale CLI. On macOS, capabilities differ by Tailscale application variant and by whether you share ports or files; check the current platform requirements for the selected variant.
 - `remote status` is local state, not a public reachability probe.

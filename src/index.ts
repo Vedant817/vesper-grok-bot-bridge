@@ -43,6 +43,8 @@ async function readJson(file: string): Promise<unknown> {
 }
 
 export async function main(args = process.argv.slice(2)): Promise<void> {
+  // CreateProcess must never resolve bare executables from the working directory.
+  process.env.NoDefaultCurrentDirectoryInExePath ??= '1';
   if (await remoteCli(args)) return;
   if (await providerCli(args)) return;
   if (await connectCli(args)) return;

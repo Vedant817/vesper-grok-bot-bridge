@@ -8,6 +8,7 @@ import { ensureCredential, readCredential } from './managed/credentials.js';
 import { daemonStatus } from './managed/runtime.js';
 import { powershellEnvironment, powershellPath, powershellScript } from './managed/powershell.js';
 import { readRemoteConfig, saveRemoteConfig, remoteCredentialPaths, remoteConfigSchema } from './remote/config.js';
+import { ownerMacKey } from './remote/key-derivation.js';
 import { signOwnerRequest } from './remote/owner-auth.js';
 
 export function parseRemoteOptions(args: string[]) {
@@ -62,7 +63,7 @@ export async function remoteCli(args: string[]): Promise<boolean> {
     const mutation = action === 'approve' || action === 'revoke';
     const path = `/owner/${action === 'revoke' ? 'revoke-client' : action}`, method = mutation ? 'POST' : 'GET';
     const body = mutation ? action === 'approve' ? { id: approvalId } : { clientId: approvalId } : undefined;
-    const proof = signOwnerRequest(await readCredential(remoteCredentialPaths(paths)), { method, path, body });
+    const proof = signOwnerRequest(ownerMacKey(await readCredential(remoteCredentialPaths(paths))), { method, path, body });
     const response = await fetch(`http://127.0.0.1:${config.port}${path}`, {
       method, redirect: 'error', signal: AbortSignal.timeout(10000),
       headers: { ...proof, 'Content-Type': 'application/json' },
@@ -92,7 +93,8 @@ export async function remoteCli(args: string[]): Promise<boolean> {
     // Validate and privately publish configuration only after an enrolled owner exists.
     JSON.parse(await readFile(paths.config, 'utf8'));
     const next = remoteConfigSchema.safeParse({ origin: options.origin, port: options.port, ...(options.command ? { tunnel: { command: options.command, args: options.args ?? [] } } : {}) });
-    if (!next.success) throw new Error('Invalid remote configuration');
+    // Schema messages are fixed strings; surfacing the first one explains credential rejections.
+    if (!next.success) throw new Error(next.error.issues[0]?.message ?? 'Invalid remote configuration');
     await ensureCredential(remoteCredentialPaths(paths));
     await saveRemoteConfig(paths, next.data);
     console.log(JSON.stringify({ enabled: true, endpoint: `${options.origin.replace(/\/$/, '')}/mcp`, restartRequired: true, authentication: 'oauth-pkce-and-private-bearer' }, null, 2)); return true;

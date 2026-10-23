@@ -13,6 +13,7 @@ import { parseManagedOptions } from '../src/managed/cli.js';
 import { daemonVbs, encodeVbs, startupScript, startupTaskName, autostartStatus, removeAutostart } from '../src/managed/startup.js';
 import { mergeOpenCodeConfig } from '../src/managed/clients.js';
 import { ensureCredential, hardenHome, readCredential } from '../src/managed/credentials.js';
+import { powershellEnvironment, powershellPath, powershellScript } from '../src/managed/powershell.js';
 
 const dirs: string[] = [];
 async function temporary() { const directory = await mkdtemp(join(tmpdir(), 'bridge-install-test-')); dirs.push(directory); return directory; }
@@ -79,8 +80,7 @@ describe('managed installation contracts', () => {
     expect(shim).toContain('launcher.cjs');
     expect(/^[\x00-\x7F]+$/.test(shim)).toBe(true);
   });
-  it('rejects Windows home paths that PATH or logon expansion would corrupt', () => {
-    if (process.platform !== 'win32') return;
+  it.runIf(process.platform === 'win32')('rejects Windows home paths that PATH or logon expansion would corrupt', () => {
     expect(() => managedPaths(join(tmpdir(), 'semi;colon'))).toThrow('cannot contain');
     expect(() => managedPaths(join(tmpdir(), 'percent%var'))).toThrow('cannot contain');
   });
@@ -98,8 +98,7 @@ describe('managed installation contracts', () => {
     await lock.release();
     await expect(access(file)).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('reports disabled and removes nothing when no autostart entry exists', async () => {
-    if (process.platform !== 'win32') return;
+  it.runIf(process.platform === 'win32')('reports disabled and removes nothing when no autostart entry exists', async () => {
     const paths = managedPaths(join(await temporary(), 'autostart-empty'));
     await expect(autostartStatus(paths)).resolves.toBe('disabled');
     await expect(removeAutostart(paths)).resolves.toEqual({ removed: false });
@@ -115,6 +114,18 @@ describe('managed installation contracts', () => {
     const token = await ensureCredential(paths);
     expect(token).toMatch(/^[a-f0-9]{64}$/);
     expect(await readCredential(paths)).toBe(token);
+  }, 30000);
+  it.runIf(process.platform === 'win32')('rotates a credential whose per-file ACL grants other principals', async () => {
+    const directory = await temporary(), paths = managedPaths(join(directory, 'acl-tamper'));
+    const original = await ensureCredential(paths);
+    // Simulate a same-user tamper: regrant World (S-1-1-0) read on the stored file.
+    const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $f=[System.IO.FileInfo]::new($env:TAMPER_TARGET); $acl=$f.GetAccessControl(); $rule=New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-1-0')),'Read','Allow'); $acl.AddAccessRule($rule); $f.SetAccessControl($acl)`;
+    const prepared = powershellScript(script);
+    await promisify(execFile)(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(prepared, 'utf16le').toString('base64')], { env: powershellEnvironment({ TAMPER_TARGET: paths.token }), windowsHide: true, timeout: 20000 });
+    await expect(readCredential(paths)).rejects.toThrow('Invalid managed credential');
+    const rotated = await ensureCredential(paths);
+    expect(rotated).not.toBe(original);
+    expect(await readCredential(paths)).toBe(rotated);
   }, 30000);
   it('refuses to strip ACLs from an unrelated non-empty directory', async () => {
     const directory = await temporary();

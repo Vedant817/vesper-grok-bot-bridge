@@ -11,7 +11,7 @@ vi.mock('node:fs/promises', async original => {
   } };
 });
 import { managedPaths } from '../src/managed/paths.js';
-import { readRemoteConfig, remoteCredentialPaths, saveRemoteConfig } from '../src/remote/config.js';
+import { readRemoteConfig, remoteConfigSchema, remoteCredentialPaths, saveRemoteConfig } from '../src/remote/config.js';
 let home: string;
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), 'remote-config-')); state.failRename = false; state.harden.mockReset().mockResolvedValue(undefined); });
 afterEach(async () => { await rm(home, { recursive: true, force: true }); });
@@ -39,8 +39,29 @@ it('rejects unknown fields, relative executable paths and NUL arguments', async 
   }
   expect(await readdir(home)).toEqual([]);
 });
+it('rejects tunnel arguments that look like embedded credentials with the credential-store message', async () => {
+  const schema = (args: string[]) => remoteConfigSchema.safeParse({ ...config(), tunnel: { command: process.execPath, args } });
+  for (const arg of ['--authtoken=abc123', 'add-authtoken', '--token', '--token=abc', '--token abc', 'api_key=zzz', 'my-api-key', 'clientSecret', 'password=hunter2', 'a'.repeat(32), 'Ab3+x_z9='.repeat(6)]) {
+    expect(schema([arg]).success).toBe(false);
+  }
+  const flagged = schema(['--authtoken=abc123']);
+  expect(flagged.success).toBe(false);
+  if (!flagged.success) expect(flagged.error.issues[0]!.message).toContain('credential store');
+  const paths = managedPaths(home);
+  for (const arg of ['--authtoken=abc123', 'a'.repeat(32)]) {
+    await expect(saveRemoteConfig(paths, { ...config(), tunnel: { command: process.execPath, args: [arg] } })).rejects.toThrow();
+  }
+  expect(await readdir(home)).toEqual([]);
+});
+it('keeps ordinary tunnel arguments, hostnames and long config paths', async () => {
+  const args = ['run', 'tunnel', '--bg', '--url=https://example.ngrok.app', '--https=8443', 'http://127.0.0.1:43189', '18771', '550e8400-e29b-41d4-a716-446655440000', join(home, 'provider-configs', 'very-long-tunnel-config-file-name.yml'), 'host.tailnet-name.ts.net:8443'];
+  const paths = managedPaths(home);
+  await saveRemoteConfig(paths, { ...config(), tunnel: { command: process.execPath, args } });
+  expect((await readRemoteConfig(paths))!.tunnel!.args).toEqual(args);
+});
 it('refuses configurations larger than its persisted read limit before hardening or publication', async () => {
-  await expect(saveRemoteConfig(managedPaths(home), { ...config(), tunnel: { command: process.execPath, args: Array(8).fill('x'.repeat(16384)) } })).rejects.toThrow('size limit');
+  // Dotted, path-like filler passes the credential-argument filter so the size limit is what fails.
+  await expect(saveRemoteConfig(managedPaths(home), { ...config(), tunnel: { command: process.execPath, args: Array(8).fill(`${'x'.repeat(8192)}.${'x'.repeat(8191)}`) } })).rejects.toThrow('size limit');
   expect(state.harden).not.toHaveBeenCalled(); expect(await readdir(home)).toEqual([]);
 });
 it('fails closed and preserves malformed existing configuration', async () => {

@@ -9,6 +9,7 @@ import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import { InvalidClientMetadataError, InvalidGrantError, InvalidRequestError, InvalidScopeError, InvalidTargetError, InvalidTokenError, ServerError, UnsupportedGrantTypeError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { hardenHome } from '../managed/credentials.js';
 import { managedPaths } from '../managed/paths.js';
+import { oauthSigningKey } from './key-derivation.js';
 import { verifyOwnerRequest } from './owner-auth.js';
 
 const scope = 'coding:operate', lifetime = 30 * 24 * 60 * 60;
@@ -91,8 +92,10 @@ export async function createRemoteOAuth(options: { origin: string; secret: strin
     try {
       if (token.length > 2048 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(token)) throw new Error();
       const [body, signature] = token.split('.');
-      const expected = createHmac('sha256', options.secret).update(body).digest('base64url');
-      if (!equal(signature, expected)) throw new Error();
+      // Verify against the HKDF oauth subkey; tokens issued before key separation
+      // were signed with the raw master and stay valid until they expire.
+      const expected = createHmac('sha256', oauthSigningKey(options.secret)).update(body).digest('base64url');
+      if (!equal(signature, expected) && !equal(signature, createHmac('sha256', options.secret).update(body).digest('base64url'))) throw new Error();
       const claims = claimsSchema.parse(JSON.parse(Buffer.from(body, 'base64url').toString('utf8')));
       if (claims.exp <= seconds() || claims.iat > seconds() + 60 || claims.exp <= claims.iat || claims.exp - claims.iat > lifetime || revoking.has(claims.sub) || !state.clients.some(client => client.client_id === claims.sub) || state.revoked.some(item => item.exp > seconds() && item.hash === digest(token).toString('hex'))) throw new Error();
       return { token, clientId: claims.sub, scopes: [scope], expiresAt: claims.exp, resource: new URL(resource) };
@@ -129,7 +132,7 @@ export async function createRemoteOAuth(options: { origin: string; secret: strin
       if (!item || item.clientId !== client.client_id || redirectUri !== item.redirectUri || (requestedResource && requestedResource.href !== resource)) throw new InvalidGrantError('Invalid authorization code');
       codes.delete(code);
       const issuedAt = seconds(), body = Buffer.from(JSON.stringify({ v: 1, jti: randomBytes(32).toString('hex'), sub: client.client_id, aud: resource, scope, iat: issuedAt, exp: issuedAt + lifetime })).toString('base64url');
-      const token = `${body}.${createHmac('sha256', options.secret).update(body).digest('base64url')}`;
+      const token = `${body}.${createHmac('sha256', oauthSigningKey(options.secret)).update(body).digest('base64url')}`;
       return { access_token: token, token_type: 'Bearer', expires_in: lifetime, scope };
     },
     exchangeRefreshToken: async () => { throw new UnsupportedGrantTypeError('Refresh tokens are not supported'); },

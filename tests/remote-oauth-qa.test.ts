@@ -13,6 +13,7 @@ import { remoteCredentialPaths, saveRemoteConfig } from '../src/remote/config.js
 import { runManagedDaemon } from '../src/managed/runtime.js';
 import { remoteCli } from '../src/remote-cli.js';
 import { Redactor } from '../src/safety.js';
+import { ownerMacKey } from '../src/remote/key-derivation.js';
 import { signOwnerRequest } from '../src/remote/owner-auth.js';
 
 const origin = 'https://qa.example.test', secret = 'b'.repeat(64), verifier = 'z'.repeat(64), redirect = 'https://client.example.test/callback';
@@ -39,7 +40,7 @@ async function token(context: Awaited<ReturnType<typeof boot>>, metadata: Record
 }
 function owner(context: Awaited<ReturnType<typeof boot>>, path: string, body?: unknown) {
   const method = body === undefined ? 'GET' : 'POST';
-  return fetch(context.host.url + path, { method, headers: { ...signOwnerRequest(secret, { method, path, body }), 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return fetch(context.host.url + path, { method, headers: { ...signOwnerRequest(ownerMacKey(secret), { method, path, body }), 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 
 it('completes locally approved PKCE after confidential-client negotiation and retains only original sanitized diagnostics', async () => {

@@ -10,7 +10,7 @@ export function classifyPermission(request: Permission, root: string): Verdict {
   const deny = (risk: Risk, reason: string): Verdict => ({ risk, allow: false, reason, alternative: 'Use a scoped structured operation inside the task worktree.' });
   if (!request.cwd || !within(root, request.cwd)) return deny('blocked', 'Missing or out-of-worktree cwd');
   const text = [request.command, request.executable, ...(request.args ?? []), request.description].filter(Boolean).join(' ');
-  if (/(?:\.ssh|\.aws|\.gnupg|credentials|id_rsa|\.env|\/etc\/|[a-z]:\\windows)|(?:\brm\b|\brmdir\b|remove-item|\bdel\b|\bdrop\s+(?:table|database)\b)|(?:\bgit\b.*(?:--force|\s-f\b|reset\s+--hard|clean\s+-))|(?:curl|wget|invoke-webrequest).*\|/i.test(text)) return deny('blocked', 'Destructive or credential-sensitive request');
+  if (/(?:\.ssh|\.aws|\.gnupg|credentials|id_rsa|id_dsa|id_ed25519|id_ecdsa|\.npmrc|\.netrc|\.kube|\.docker|\.azure|\.gcloud|\.config[\/\\]gh[\/\\]hosts|\.env|\/etc\/|[a-z]:\\windows|[a-z]:\\windows~\d)|(?:\brm\b|\brmdir\b|remove-item|\bdel\b|\bunlink\b|\bshred\b|(?:^|\s)-delete\b|\berase\b|\bri\b|\brd\s+\/[sq]|\bdrop\s+(?:table|database)\b)|(?:\bgit\b.*(?:--force|\s-f\b|reset\s+--hard|clean\s+-))|(?:curl|wget|invoke-webrequest).*\|/i.test(text)) return deny('blocked', 'Destructive or credential-sensitive request');
   if (!request.executable || request.command) return deny('guarded', 'Unstructured shell commands require explicit policy');
   const args = request.args ?? [];
   if (args.some(a => /[\x00-\x1f;&|<>`$!*?]/.test(a) || a.startsWith('-C') || a.startsWith('--git-dir') || a.startsWith('--work-tree') || a.includes('..') || isAbsolute(a))) return deny('guarded', 'Ambiguous argument or path');
@@ -38,7 +38,9 @@ export class Redactor {
       .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, '[REDACTED PRIVATE KEY]')
       .replace(/\b(?:sk-|xai-|ghp_|github_pat_)[A-Za-z0-9_-]{8,}/g, '[REDACTED]')
       .replace(/(bearer\s+)[^\s"',}]+/gi, '$1[REDACTED]')
-      .replace(/((?:api[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1[REDACTED]');
+      .replace(/((?:api[_-]?key|token|password|secret)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, '$1[REDACTED]')
+      // .netrc separates the password with whitespace; 8+ chars keeps prose like "password manager" intact.
+      .replace(/((?:^|\s)password\s+)([^\s"',}]{8,})/gi, '$1[REDACTED]');
   }
 }
 

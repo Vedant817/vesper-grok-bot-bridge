@@ -18,6 +18,13 @@ Grok Bot native t3-connect MCP tools
 
 Use [the native T3 setup](T3_CONNECT_QUICKSTART.md) once. Grok Bot selects a provider and exact model from `orchestrator_capabilities`, then creates or continues a thread through the same connection. A separate connector per coding CLI is not needed. T3 owns its provider installation, authentication, and protocol adapters. Native provider login remains a separate requirement.
 
+### Environment exposure
+
+Two exposures of the T3 Connect flow are accepted by design:
+
+- The access token reaches the T3 launcher child through the `T3_ACP_MCP_AUTHORIZATION` environment variable (the documented T3 bridge contract). Environment blocks are readable by same-user processes and inherited by descendant processes.
+- `T3_ACP_MCP_NODE` and `T3_ACP_MCP_ENTRYPOINT` are honored as an ACP fallback launcher. Whoever controls the daemon's environment selects that binary.
+
 The standalone bridge below operates independently from this T3 route. Authentication and acceptance results for the two routes must be reported separately.
 
 ## Supported interfaces

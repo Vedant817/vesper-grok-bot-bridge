@@ -2,10 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
 import { request as httpRequest } from 'node:http';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ownerMacKey } from '../src/remote/key-derivation.js';
 import { createRemoteOAuth } from '../src/remote/oauth.js';
 import { signOwnerRequest } from '../src/remote/owner-auth.js';
 
@@ -23,9 +24,9 @@ async function boot() {
 beforeEach(async () => { home = await mkdtemp(join(tmpdir(), 'remote-oauth-')); await boot(); });
 afterEach(async () => { vi.restoreAllMocks(); await new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }); await rm(home, { recursive: true, force: true }); });
 const post = (path: string, body: Record<string, string>) => fetch(base + path, { method: 'POST', body: new URLSearchParams(body), redirect: 'manual' });
-const owner = (path: string, body?: unknown, extra: Record<string, string> = {}) => fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { ...signOwnerRequest(secret, { method: body === undefined ? 'GET' : 'POST', path, body }), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+const owner = (path: string, body?: unknown, extra: Record<string, string> = {}) => fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { ...signOwnerRequest(ownerMacKey(secret), { method: body === undefined ? 'GET' : 'POST', path, body }), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
 const publicOwner = (path: string, body?: unknown): Promise<number> => new Promise((resolve, reject) => {
-  const req = httpRequest(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { Host: 'bridge.example.test', ...signOwnerRequest(secret, { method: body === undefined ? 'GET' : 'POST', path, body }), 'Content-Type': 'application/json' } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode!)); });
+  const req = httpRequest(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { Host: 'bridge.example.test', ...signOwnerRequest(ownerMacKey(secret), { method: body === undefined ? 'GET' : 'POST', path, body }), 'Content-Type': 'application/json' } }, res => { res.resume(); res.on('end', () => resolve(res.statusCode!)); });
   req.on('error', reject); req.end(body === undefined ? undefined : JSON.stringify(body));
 });
 async function register(redirect = redirectUri, extra: Record<string, unknown> = {}) {
@@ -63,6 +64,14 @@ it('real SDK DCR/PKCE handlers issue a bound token only after private local appr
   expect((await exchange(value)).status).toBe(400);
   const stored = await readFile(join(home, 'remote-oauth.json'), 'utf8'); expect(stored).not.toContain(secret); expect(stored).not.toContain(tokens.access_token); expect(stored).not.toContain(value.code);
 });
+it('still verifies access tokens issued before HKDF key separation, and only those', async () => {
+  const value = await approved(), issuedAt = Math.floor(Date.now() / 1000);
+  const body = Buffer.from(JSON.stringify({ v: 1, jti: 'f'.repeat(64), sub: value.clientId, aud: origin + '/mcp', scope: 'coding:operate', iat: issuedAt, exp: issuedAt + 30 * 24 * 60 * 60 })).toString('base64url');
+  const info = await oauth.verify(`${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`);
+  expect(info.clientId).toBe(value.clientId); expect(info.scopes).toEqual(['coding:operate']);
+  // A signature from an unrelated key matches neither the subkey nor the legacy master check.
+  await expect(oauth.verify(`${body}.${createHmac('sha256', 'z'.repeat(64)).update(body).digest('base64url')}`)).rejects.toThrow('Invalid access token');
+});
 it('rejects wrong PKCE, redirect, client and resource without permitting token issuance', async () => {
   const value = await approved(), other = await (await register()).json();
   const invalid: Record<string, string>[] = [{ code_verifier: 'wrong' }, { redirect_uri: redirectUri + '/other' }, { client_id: other.client_id }, { resource: 'https://other.test/mcp' }];
@@ -80,11 +89,11 @@ it('refuses public Host owner approval even with the correct private credential'
 });
 it('rejects owner bearer credentials, replayed signatures and body tampering', async () => {
   expect((await fetch(base + '/owner/pending', { headers: { Authorization: `Bearer ${secret}` } })).status).toBe(403);
-  const headers = signOwnerRequest(secret, { method: 'GET', path: '/owner/pending' });
+  const headers = signOwnerRequest(ownerMacKey(secret), { method: 'GET', path: '/owner/pending' });
   expect(JSON.stringify(headers)).not.toContain(secret);
   expect((await fetch(base + '/owner/pending', { headers })).status).toBe(200);
   expect((await fetch(base + '/owner/pending', { headers })).status).toBe(403);
-  const signed = signOwnerRequest(secret, { method: 'POST', path: '/owner/approve', body: { id: 'a'.repeat(32) } });
+  const signed = signOwnerRequest(ownerMacKey(secret), { method: 'POST', path: '/owner/approve', body: { id: 'a'.repeat(32) } });
   expect((await fetch(base + '/owner/approve', { method: 'POST', headers: { ...signed, 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'b'.repeat(32) }) })).status).toBe(403);
 });
 it('owner diagnostics expose bounded contract facts without request secrets or callback values', async () => {
