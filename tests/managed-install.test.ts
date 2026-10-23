@@ -115,7 +115,7 @@ describe('managed installation contracts', () => {
     const token = await ensureCredential(paths);
     expect(token).toMatch(/^[a-f0-9]{64}$/);
     expect(await readCredential(paths)).toBe(token);
-  });
+  }, 30000);
   it('refuses to strip ACLs from an unrelated non-empty directory', async () => {
     const directory = await temporary();
     await writeFile(join(directory, 'notes.txt'), 'keep');

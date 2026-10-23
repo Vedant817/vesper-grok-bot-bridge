@@ -1,5 +1,8 @@
 name: Verify
 on: [push, pull_request]
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     timeout-minutes: 15
@@ -23,6 +26,7 @@ jobs:
         if: runner.os == 'Windows'
         run: node scripts/check-windows-runtime.mjs
       - name: Tests
-        run: npm test -- --no-file-parallelism --maxWorkers 1 --bail 1 --reporter verbose
+        # Native Windows credential/ACL helpers can exceed Vitest's unit-test defaults.
+        run: npm test -- --no-file-parallelism --maxWorkers 1 --bail 1 --reporter verbose --testTimeout 30000 --hookTimeout 60000
       - run: npm audit --audit-level=moderate
       - run: npm pack --dry-run
