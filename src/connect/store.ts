@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { hardenHome } from '../managed/credentials.js';
 import { managedPaths } from '../managed/paths.js';
-import { powershellEnvironment, powershellPath } from '../managed/powershell.js';
+import { powershellEnvironment, powershellPath, powershellScript } from '../managed/powershell.js';
 import { connectEndpoint } from './security.js';
 
 const recordSchema = z.object({
@@ -32,7 +32,8 @@ const scripts = {
 async function windowsRecord(operation: keyof typeof scripts, value: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${scripts[operation]}`;
-    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    const prepared = powershellScript(script, operation === 'check' ? ['Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security'] : ['Microsoft.PowerShell.Utility']);
+    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(prepared, 'utf16le').toString('base64')], {
       windowsHide: true, env: powershellEnvironment(), stdio: ['pipe', 'pipe', 'ignore']
     });
     let output = '', settled = false;

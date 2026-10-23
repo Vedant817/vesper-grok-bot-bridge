@@ -14,7 +14,7 @@ import { controlPipe, ensureControlKey } from '../src/managed/control.js';
 import { daemonStatus, healthManaged, runManagedDaemon, startManaged, stopManaged } from '../src/managed/runtime.js';
 import { createManagedProxy } from '../src/managed/proxy.js';
 import { Redactor } from '../src/safety.js';
-import { powershellEnvironment } from '../src/managed/powershell.js';
+import { powershellEnvironment, powershellScript } from '../src/managed/powershell.js';
 
 const execute = promisify(execFile);
 
@@ -39,7 +39,8 @@ describe('managed private runtime and restart-safe MCP proxy', { timeout: 60000 
   it.runIf(process.platform === 'win32')('re-hardens the managed home idempotently to owner and SYSTEM only', async () => {
     await hardenHome(paths); await hardenHome(paths);
     const script = `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $acl=Get-Acl -LiteralPath $env:BRIDGE_ACL_TARGET; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $sids=@($acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }); [pscustomobject]@{ protected=$acl.AreAccessRulesProtected; owner=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; sid=$sid; sids=$sids } | ConvertTo-Json -Compress`;
-    const { stdout } = await execute(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env: powershellEnvironment({ BRIDGE_ACL_TARGET: paths.home }), windowsHide: true });
+    const prepared = powershellScript(script, ['Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security']);
+    const { stdout } = await execute(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(prepared, 'utf16le').toString('base64')], { env: powershellEnvironment({ BRIDGE_ACL_TARGET: paths.home }), windowsHide: true, timeout: 20000 });
     const acl = JSON.parse(stdout.trim()) as { protected: boolean; owner: string; sid: string; sids: string | string[] };
     expect(acl.protected).toBe(true);
     expect(acl.owner).toBe(acl.sid);

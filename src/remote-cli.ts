@@ -6,7 +6,7 @@ import { managedPaths } from './managed/paths.js';
 import { acquireSetupLock, assertManageableDaemon } from './managed/install.js';
 import { ensureCredential, readCredential } from './managed/credentials.js';
 import { daemonStatus } from './managed/runtime.js';
-import { powershellEnvironment, powershellPath } from './managed/powershell.js';
+import { powershellEnvironment, powershellPath, powershellScript } from './managed/powershell.js';
 import { readRemoteConfig, saveRemoteConfig, remoteCredentialPaths, remoteConfigSchema } from './remote/config.js';
 import { signOwnerRequest } from './remote/owner-auth.js';
 
@@ -33,7 +33,7 @@ async function copyCredential(token: string): Promise<void> {
   if (process.platform !== 'win32') throw new Error('Clipboard enrollment currently requires Windows; use a private OS credential channel on other systems');
   const script = "$ErrorActionPreference='Stop'; $v=[Console]::In.ReadToEnd(); Set-Clipboard -Value $v; [Console]::Out.WriteLine('copied'); Start-Sleep -Seconds 60; if((Get-Clipboard -Raw).TrimEnd() -ceq $v){Set-Clipboard -Value ''}";
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, env: powershellEnvironment(), stdio: ['pipe', 'pipe', 'ignore'] });
+    const child = spawn(powershellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(powershellScript(script), 'utf16le').toString('base64')], { windowsHide: true, env: powershellEnvironment(), stdio: ['pipe', 'pipe', 'ignore'] });
     let settled = false, output = '';
     const timer = setTimeout(() => { child.kill(); finish(new Error('Private clipboard operation timed out')); }, 10000);
     const finish = (error?: Error) => { if (settled) return; settled = true; clearTimeout(timer); if (error) reject(error); else { child.stdout.destroy(); child.unref(); resolve(); } };

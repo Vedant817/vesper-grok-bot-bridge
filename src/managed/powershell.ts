@@ -6,7 +6,7 @@ export function powershellPath(): string {
 }
 
 /** Avoid scanning unrelated installed modules to resolve helper cmdlets. */
-export function powershellScript(script: string, modules: readonly ('Microsoft.PowerShell.Utility' | 'ScheduledTasks')[] = ['Microsoft.PowerShell.Utility']): string {
+export function powershellScript(script: string, modules: readonly ('Microsoft.PowerShell.Utility' | 'Microsoft.PowerShell.Security' | 'ScheduledTasks')[] = ['Microsoft.PowerShell.Utility']): string {
   return modules.map(name => `Import-Module "$PSHOME\\Modules\\${name}\\${name}.psd1" -ErrorAction Stop; `).join('') + script;
 }
 

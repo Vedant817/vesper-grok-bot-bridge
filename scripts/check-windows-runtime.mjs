@@ -8,7 +8,7 @@ const marker = 'helper-ready';
 const probes = [
   ['startup', `[Console]::Out.Write('${marker}')`, false],
   ['encoded stdin', `[Console]::Out.Write([Console]::In.ReadToEnd())`, true],
-  ['utility module', powershellScript(`ConvertFrom-Json '{"ready":true}' | Out-Null; [Console]::Out.Write('${marker}')`), false],
+  ['credential modules', powershellScript(`Get-Command ConvertFrom-Json,Get-Acl -ErrorAction Stop | Out-Null; [Console]::Out.Write('${marker}')`, ['Microsoft.PowerShell.Utility', 'Microsoft.PowerShell.Security']), false],
   ['scheduler module', powershellScript(`Get-Command Get-ScheduledTask -ErrorAction Stop | Out-Null; [Console]::Out.Write('${marker}')`, ['Microsoft.PowerShell.Utility', 'ScheduledTasks']), false],
 ];
 let failed = false;
