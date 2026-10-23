@@ -6,12 +6,12 @@ import { hardenHome } from '../managed/credentials.js';
 import type { ManagedPaths } from '../managed/paths.js';
 
 // Tunnel secrets must stay in the tunnel's own credential store, never in remote.json.
-// A bare token-like string is 32+ characters of the token alphabet with no path
-// separators, colon, or dot-with-extension, so hostnames and config paths pass.
-// UUID-shaped identifiers (e.g. `tunnel run <id>`) are names, not secrets.
+// A bare token-like string is 32+ characters of the separator-free token alphabet
+// (hex, base64url, dashed identifiers) with no path separator, dot, colon or padding,
+// so hostnames, config paths and dotless POSIX files pass. UUIDs are names, not secrets.
 const credentialArg = (value: string): boolean =>
   /(?:authtoken|--token(?:=|\s|$)|api[_-]?key|client[_-]?secret|password)/i.test(value) ||
-  (/^[A-Za-z0-9+/=_-]{32,}$/.test(value) && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
+  (/^[A-Za-z0-9_-]{32,}$/.test(value) && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
 
 export const remoteConfigSchema = z.object({
   origin: z.string().max(2048).refine(value => {

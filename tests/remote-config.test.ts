@@ -41,7 +41,7 @@ it('rejects unknown fields, relative executable paths and NUL arguments', async 
 });
 it('rejects tunnel arguments that look like embedded credentials with the credential-store message', async () => {
   const schema = (args: string[]) => remoteConfigSchema.safeParse({ ...config(), tunnel: { command: process.execPath, args } });
-  for (const arg of ['--authtoken=abc123', 'add-authtoken', '--token', '--token=abc', '--token abc', 'api_key=zzz', 'my-api-key', 'clientSecret', 'password=hunter2', 'a'.repeat(32), 'Ab3+x_z9='.repeat(6)]) {
+  for (const arg of ['--authtoken=abc123', 'add-authtoken', '--token', '--token=abc', '--token abc', 'api_key=zzz', 'my-api-key', 'clientSecret', 'password=hunter2', 'a'.repeat(32), 'Ab3_xZ9-'.repeat(4)]) {
     expect(schema([arg]).success).toBe(false);
   }
   const flagged = schema(['--authtoken=abc123']);
@@ -54,7 +54,7 @@ it('rejects tunnel arguments that look like embedded credentials with the creden
   expect(await readdir(home)).toEqual([]);
 });
 it('keeps ordinary tunnel arguments, hostnames and long config paths', async () => {
-  const args = ['run', 'tunnel', '--bg', '--url=https://example.ngrok.app', '--https=8443', 'http://127.0.0.1:43189', '18771', '550e8400-e29b-41d4-a716-446655440000', join(home, 'provider-configs', 'very-long-tunnel-config-file-name.yml'), 'host.tailnet-name.ts.net:8443'];
+  const args = ['run', 'tunnel', '--bg', '--url=https://example.ngrok.app', '--https=8443', 'http://127.0.0.1:43189', '18771', '550e8400-e29b-41d4-a716-446655440000', '/tmp/remote-start-stop-abc123/started', join(home, 'provider-configs', 'very-long-tunnel-config-file-name.yml'), 'host.tailnet-name.ts.net:8443'];
   const paths = managedPaths(home);
   await saveRemoteConfig(paths, { ...config(), tunnel: { command: process.execPath, args } });
   expect((await readRemoteConfig(paths))!.tunnel!.args).toEqual(args);
