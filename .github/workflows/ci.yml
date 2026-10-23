@@ -2,6 +2,7 @@ name: Verify
 on: [push, pull_request]
 jobs:
   test:
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -17,7 +18,7 @@ jobs:
       - name: Type check
         run: npm run lint
       - name: Tests
-        run: npm test -- --no-file-parallelism --maxWorkers 1
+        run: npm test -- --no-file-parallelism --maxWorkers 1 --bail 1 --reporter verbose
       - name: Build
         run: npm run build
       - run: npm audit --audit-level=moderate
