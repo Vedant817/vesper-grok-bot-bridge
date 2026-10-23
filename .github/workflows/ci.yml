@@ -17,9 +17,12 @@ jobs:
       - run: npm ci
       - name: Type check
         run: npm run lint
-      - name: Tests
-        run: npm test -- --no-file-parallelism --maxWorkers 1 --bail 1 --reporter verbose
       - name: Build
         run: npm run build
+      - name: Check Windows helper runtime
+        if: runner.os == 'Windows'
+        run: node scripts/check-windows-runtime.mjs
+      - name: Tests
+        run: npm test -- --no-file-parallelism --maxWorkers 1 --bail 1 --reporter verbose
       - run: npm audit --audit-level=moderate
       - run: npm pack --dry-run

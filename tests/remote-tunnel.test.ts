@@ -18,7 +18,8 @@ it('launches directly with literal argument boundaries and closes its owned nati
   expect(result.args).toEqual(args); expect(alive(result.pid)).toBe(true); expect(alive(result.child)).toBe(true);
   await Promise.all([tunnel.close(), tunnel.close()]);
   expect(alive(result.pid)).toBe(false);
-  expect(alive(result.child)).toBe(false);
+  // The detached grandchild can briefly remain visible until the OS reaps it.
+  await expect.poll(() => alive(result.child), { timeout: 5000, interval: 25 }).toBe(false);
 }, 15000);
 it('rejects immediate failure with a generic diagnostic instead of forwarding process output', async () => {
   await expect(startRemoteTunnel(config(['-e', 'console.error("secret-should-not-appear");process.exit(42)']))).rejects.toThrow('Remote tunnel failed during startup');
