@@ -24,6 +24,7 @@ export function credentialReference(endpoint: string): string {
 }
 const decode = '$v=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(([Console]::In.ReadToEnd()).Trim()));';
 const scripts = {
+  own: `${decode} $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $file=[System.IO.FileInfo]::new($v); $acl=$file.GetAccessControl(); $acl.SetOwner($sid); $file.SetAccessControl($acl)`,
   protect: `${decode} Add-Type -AssemblyName System.Security; [Console]::Out.Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($v),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`,
   unprotect: `${decode} Add-Type -AssemblyName System.Security; [Console]::Out.Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($v),$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`,
   check: `${decode} $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $acl=Get-Acl -LiteralPath $v; if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw 'owner'}; foreach($r in $acl.Access){if($r.AccessControlType -eq 'Allow' -and $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin @($sid,'S-1-5-18')){throw 'permissions'}}`
@@ -37,10 +38,10 @@ async function windowsRecord(operation: keyof typeof scripts, value: string): Pr
       windowsHide: true, env: powershellEnvironment(), stdio: ['pipe', 'pipe', 'ignore']
     });
     let output = '', settled = false;
-    const finish = (ok: boolean) => { if (settled) return; settled = true; clearTimeout(timer); ok ? resolve(output) : reject(new Error('Connect private credential operation failed')); };
+    const finish = (ok: boolean, exitCode?: number | null) => { if (settled) return; settled = true; clearTimeout(timer); ok ? resolve(output) : reject(new Error(`Connect private credential operation failed (${operation}; exit ${exitCode ?? 'unknown'})`)); };
     const timer = setTimeout(() => { child.kill(); finish(false); }, 20000);
     child.stdout.setEncoding('utf8'); child.stdout.on('data', (chunk: string) => { output += chunk; if (output.length > 262144) { child.kill(); finish(false); } });
-    child.on('error', () => finish(false)); child.on('close', code => finish(code === 0));
+    child.on('error', () => finish(false)); child.on('close', code => finish(code === 0, code));
     child.stdin.on('error', () => {}); child.stdin.end(Buffer.from(value, 'utf8').toString('base64'));
   });
 }
@@ -83,6 +84,9 @@ export class FileConnectCredentialStore implements ConnectCredentialStore {
     const temporary = join(this.home, `${randomUUID()}.tmp`);
     try {
       await writeFile(temporary, data, { flag: 'wx', mode: 0o600 });
+      // Elevated tokens can default new files to Administrators as owner. Keep the
+      // strict per-user check by setting ownership on our fresh private file only.
+      if (process.platform === 'win32') await windowsRecord('own', temporary);
       await rename(temporary, path);
     } finally { await unlink(temporary).catch(() => {}); }
   }
