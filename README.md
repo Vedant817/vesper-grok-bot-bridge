@@ -39,6 +39,8 @@ Use your own accounts and approved authentication. Keep native approvals, admini
 
 Read [the current provider-policy review](docs/PROVIDER_POLICY.md) before use or publication. It covers OpenAI, Anthropic, xAI and other workers, including subscription-versus-API and hosted/commercial boundaries. ACP support and passing tests are not vendor approval, and nobody can guarantee immunity from account restrictions.
 
+CLIProxyAPI-style multi-account pooling, automatic failover on quota/authentication errors, and client fingerprint cloaking are not integrated; the [assessment](docs/research/CLIPROXYAPI.md) explains the account and contract risk.
+
 The coding computer must stay awake and online with its selected backend and tunnel running. Persisted enrollment is not a promise of indefinite OAuth validity. Native Grok Bot approval cards can still interrupt unattended work; physical reboot and app-closed operation remain separate acceptance limits. [Live results and limitations](docs/CLI_CONNECTIONS.md), [verification history](docs/VERIFICATION.md).
 
 ## Develop and distribute

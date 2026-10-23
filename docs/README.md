@@ -17,3 +17,4 @@
 - [Architecture](ARCHITECTURE.md), [protocol contracts](PROTOCOLS.md), [verification history and limits](VERIFICATION.md).
 - [Legacy API-key supervisor](LEGACY_SUPERVISOR.md): optional advanced mode, separate from the Grok Bot templates.
 - [Mesh research](research/MESH.md): optional future transport assessment, not a dependency.
+- [CLIProxyAPI assessment](research/CLIPROXYAPI.md): why account pooling, quota failover and client cloaking are not integrated.
