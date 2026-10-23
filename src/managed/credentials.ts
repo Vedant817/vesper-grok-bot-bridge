@@ -16,6 +16,9 @@ const scripts = {
   // Per-file tamper check: the owner must be this user and every Allow ACE must resolve to
   // this user or SYSTEM, so a same-user swap granting other principals read fails closed.
   check: `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${decode}|ConvertFrom-Json; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $f=[System.IO.FileInfo]::new($v.path); $acl=$f.GetAccessControl(); if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid){throw 'owner'}; foreach($r in @($acl.Access)){ if($r.AccessControlType -eq 'Allow' -and $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin @($sid,'S-1-5-18')){throw 'permissions'} }`,
+  // Elevated tokens publish files owned by the Administrators group; claim per-user
+  // ownership before publishing so the per-file check accepts the credential we made.
+  own: `$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; ${decode}; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; $f=[System.IO.FileInfo]::new($v); $acl=$f.GetAccessControl(); $acl.SetOwner($sid); $f.SetAccessControl($acl)`,
   protect: `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; ${decode}; $b=[Text.Encoding]::UTF8.GetBytes($v); [Console]::Out.Write([Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`,
   unprotect: `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; ${decode}; $b=[Convert]::FromBase64String($v); [Console]::Out.Write([Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))`
 };
@@ -129,6 +132,7 @@ export async function ensureCredential(paths: ManagedPaths): Promise<string> {
   const temporary = paths.token + '.' + randomUUID() + '.tmp';
   try {
     await writeFile(temporary, stored, { flag: 'wx', mode: 0o600 });
+    if (process.platform === 'win32') await windowsHelper(scripts.own, encode(temporary));
     if (invalid) {
       try { await rename(paths.token, `${paths.token}.invalid-${Date.now()}`); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
