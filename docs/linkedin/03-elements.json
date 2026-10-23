@@ -1,0 +1,17 @@
+[
+  {"id":"title","type":"text","x":36,"y":20,"width":1500,"height":44,"text":"Not another bot that writes the diff.","fontSize":32,"strokeColor":"#1c1c1c"},
+  {"id":"sub","type":"text","x":36,"y":70,"width":1500,"height":32,"text":"The coding agent already exists. Vesper keeps the thread, the model, and the proof.","fontSize":18,"strokeColor":"#495057"},
+
+  {"id":"s1","type":"rectangle","x":36,"y":140,"width":250,"height":150,"backgroundColor":"#d0bfff","strokeColor":"#6741d9","fillStyle":"solid","roughness":1,"text":"1  Discover\nreal models\nand tools","fontSize":18},
+  {"id":"s2","type":"rectangle","x":330,"y":140,"width":250,"height":150,"backgroundColor":"#a5d8ff","strokeColor":"#1971c2","fillStyle":"solid","roughness":1,"text":"2  One session\nexact repo\nand model","fontSize":18},
+  {"id":"s3","type":"rectangle","x":624,"y":140,"width":250,"height":150,"backgroundColor":"#b2f2bb","strokeColor":"#2f9e44","fillStyle":"solid","roughness":1,"text":"3  Read\nthe same\nthread","fontSize":18},
+  {"id":"s4","type":"rectangle","x":918,"y":140,"width":250,"height":150,"backgroundColor":"#ffec99","strokeColor":"#f08c00","fillStyle":"solid","roughness":1,"text":"4  Correct\nin that\nsession","fontSize":18},
+  {"id":"s5","type":"rectangle","x":1212,"y":140,"width":270,"height":150,"backgroundColor":"#ffd8a8","strokeColor":"#e8590c","fillStyle":"solid","roughness":1,"text":"5  Your tests\nthen finish\non evidence","fontSize":18},
+  {"type":"arrow","x":0,"y":0,"startElementId":"s1","endElementId":"s2","strokeColor":"#495057"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"s2","endElementId":"s3","strokeColor":"#495057"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"s3","endElementId":"s4","strokeColor":"#495057"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"s4","endElementId":"s5","strokeColor":"#495057"},
+
+  {"id":"human","type":"rectangle","x":36,"y":340,"width":700,"height":160,"backgroundColor":"#fff4e6","strokeColor":"#e8590c","fillStyle":"solid","roughness":1,"text":"Stays human\nlogin, MFA, payment, push, merge","fontSize":20},
+  {"id":"not","type":"rectangle","x":770,"y":340,"width":712,"height":160,"backgroundColor":"#ffe3e3","strokeColor":"#c92a2a","fillStyle":"solid","roughness":1,"text":"Does not do\nnew agent per message, account swap,\nor “done” without the verifier","fontSize":18}
+]

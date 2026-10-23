@@ -1,0 +1,20 @@
+[
+  {"id":"title","type":"text","x":40,"y":24,"width":1400,"height":44,"text":"Two routes. Two credentials. No silent fallback.","fontSize":32,"strokeColor":"#1c1c1c"},
+  {"id":"sub","type":"text","x":40,"y":76,"width":1400,"height":32,"text":"Same assistant habit. Different machines. Approving one does not open the other.","fontSize":18,"strokeColor":"#495057"},
+
+  {"id":"za","type":"rectangle","x":36,"y":130,"width":680,"height":520,"backgroundColor":"#e7f5ff","strokeColor":"#1971c2","strokeStyle":"dashed","fillStyle":"solid","roughness":1},
+  {"id":"zal","type":"text","x":60,"y":148,"width":620,"height":36,"text":"Vesper — T3","fontSize":24,"strokeColor":"#1864ab"},
+  {"id":"a1","type":"rectangle","x":80,"y":210,"width":590,"height":80,"backgroundColor":"#a5d8ff","strokeColor":"#1971c2","fillStyle":"solid","roughness":1,"text":"Grok Bot on xAI cloud","fontSize":20},
+  {"id":"a2","type":"rectangle","x":80,"y":340,"width":590,"height":90,"backgroundColor":"#d0bfff","strokeColor":"#6741d9","fillStyle":"solid","roughness":1,"text":"T3 Connect  ·  their HTTPS /mcp + OAuth","fontSize":18},
+  {"id":"a3","type":"rectangle","x":80,"y":480,"width":590,"height":120,"backgroundColor":"#b2f2bb","strokeColor":"#2f9e44","fillStyle":"solid","roughness":1,"text":"Your T3 host keeps the threads\nNo bridge package on this route","fontSize":18},
+  {"type":"arrow","x":0,"y":0,"startElementId":"a1","endElementId":"a2","strokeColor":"#1971c2"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"a2","endElementId":"a3","strokeColor":"#6741d9"},
+
+  {"id":"zb","type":"rectangle","x":760,"y":130,"width":720,"height":520,"backgroundColor":"#fff4e6","strokeColor":"#e8590c","strokeStyle":"dashed","fillStyle":"solid","roughness":1},
+  {"id":"zbl","type":"text","x":784,"y":148,"width":660,"height":36,"text":"Vesper — CLI","fontSize":24,"strokeColor":"#d9480f"},
+  {"id":"b1","type":"rectangle","x":800,"y":210,"width":640,"height":80,"backgroundColor":"#a5d8ff","strokeColor":"#1971c2","fillStyle":"solid","roughness":1,"text":"Grok Bot on xAI cloud","fontSize":20},
+  {"id":"b2","type":"rectangle","x":800,"y":340,"width":640,"height":90,"backgroundColor":"#ffec99","strokeColor":"#f08c00","fillStyle":"solid","roughness":1,"text":"Your Funnel URL  ·  bridge OAuth","fontSize":18},
+  {"id":"b3","type":"rectangle","x":800,"y":480,"width":640,"height":120,"backgroundColor":"#ffd8a8","strokeColor":"#e8590c","fillStyle":"solid","roughness":1,"text":"One local bridge, many CLIs\nCodex, Claude, ACP in a worktree","fontSize":18},
+  {"type":"arrow","x":0,"y":0,"startElementId":"b1","endElementId":"b2","strokeColor":"#1971c2"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"b2","endElementId":"b3","strokeColor":"#e8590c"}
+]

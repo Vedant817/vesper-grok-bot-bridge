@@ -1,0 +1,28 @@
+[
+  {"id":"title","type":"text","x":48,"y":24,"width":1500,"height":48,"text":"Cloud reasoning. Local code. One approved door.","fontSize":32,"strokeColor":"#1c1c1c"},
+  {"id":"sub","type":"text","x":48,"y":76,"width":1500,"height":32,"text":"Grok Bot runs on xAI's computers. Your repo and CLI logins never move there.","fontSize":18,"strokeColor":"#495057"},
+
+  {"id":"z1","type":"rectangle","x":36,"y":128,"width":400,"height":680,"backgroundColor":"#e7f5ff","strokeColor":"#1971c2","strokeStyle":"dashed","fillStyle":"solid","roughness":1},
+  {"id":"z1l","type":"text","x":56,"y":144,"width":340,"height":32,"text":"xAI cloud","fontSize":22,"strokeColor":"#1864ab"},
+  {"id":"you","type":"rectangle","x":68,"y":200,"width":336,"height":88,"backgroundColor":"#d0bfff","strokeColor":"#6741d9","fillStyle":"solid","roughness":1,"text":"You  ·  what done means","fontSize":18},
+  {"id":"bot","type":"rectangle","x":68,"y":360,"width":336,"height":160,"backgroundColor":"#a5d8ff","strokeColor":"#1971c2","fillStyle":"solid","roughness":1,"text":"Vesper on Grok Bot\nplans, reviews, follows up\nno shell on your machine","fontSize":18},
+  {"id":"blocked","type":"text","x":68,"y":560,"width":336,"height":120,"text":"Not reachable from here:\nlocalhost, a LAN address,\nor private Tailscale Serve","fontSize":16,"strokeColor":"#c92a2a"},
+
+  {"id":"z2","type":"rectangle","x":468,"y":128,"width":520,"height":680,"backgroundColor":"#ebfbee","strokeColor":"#2f9e44","strokeStyle":"dashed","fillStyle":"solid","roughness":1},
+  {"id":"z2l","type":"text","x":488,"y":144,"width":470,"height":32,"text":"Owner-controlled path","fontSize":22,"strokeColor":"#2b8a3e"},
+  {"id":"funnel","type":"rectangle","x":496,"y":360,"width":220,"height":160,"backgroundColor":"#b2f2bb","strokeColor":"#2f9e44","fillStyle":"solid","roughness":1,"text":"Tailscale Funnel\npublic HTTPS\nTLS ends on PC","fontSize":16},
+  {"id":"oauth","type":"rectangle","x":756,"y":360,"width":200,"height":160,"backgroundColor":"#ffec99","strokeColor":"#f08c00","fillStyle":"solid","roughness":1,"text":"OAuth + PKCE\none local approval\nHost check","fontSize":16},
+
+  {"id":"z3","type":"rectangle","x":1020,"y":128,"width":520,"height":680,"backgroundColor":"#fff4e6","strokeColor":"#e8590c","strokeStyle":"dashed","fillStyle":"solid","roughness":1},
+  {"id":"z3l","type":"text","x":1040,"y":144,"width":470,"height":32,"text":"Your computer","fontSize":22,"strokeColor":"#d9480f"},
+  {"id":"bridge","type":"rectangle","x":1056,"y":360,"width":448,"height":160,"backgroundColor":"#ffd8a8","strokeColor":"#e8590c","fillStyle":"solid","roughness":1,"text":"MCP bridge\n127.0.0.1 only","fontSize":20},
+  {"id":"cli","type":"rectangle","x":1056,"y":560,"width":448,"height":100,"backgroundColor":"#ffc9c9","strokeColor":"#e03131","fillStyle":"solid","roughness":1,"text":"Codex, Claude, ACP  ·  logins stay here","fontSize":16},
+  {"id":"wt","type":"rectangle","x":1056,"y":690,"width":448,"height":90,"backgroundColor":"#ffe8cc","strokeColor":"#e8590c","fillStyle":"solid","roughness":1,"text":"Git worktree + your tests","fontSize":18},
+
+  {"type":"arrow","x":0,"y":0,"startElementId":"you","endElementId":"bot","strokeColor":"#6741d9"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"bot","endElementId":"funnel","strokeColor":"#1971c2"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"funnel","endElementId":"oauth","strokeColor":"#2f9e44"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"oauth","endElementId":"bridge","strokeColor":"#f08c00"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"bridge","endElementId":"cli","strokeColor":"#e8590c"},
+  {"type":"arrow","x":0,"y":0,"startElementId":"cli","endElementId":"wt","strokeColor":"#e8590c"}
+]
