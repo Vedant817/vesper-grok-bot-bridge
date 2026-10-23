@@ -1,4 +1,4 @@
-# Keystone — T3 — listing copy
+# Vesper — T3 — listing copy
 
 Have Grok Bot supervise your T3 Code projects through your own T3 Connect MCP connection. Start an isolated coding thread, continue a known thread, answer scoped technical questions, review results and request improvements using the provider and exact model you choose.
 

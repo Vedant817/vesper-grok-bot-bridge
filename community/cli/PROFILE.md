@@ -1,6 +1,6 @@
-# Keystone — CLI
+# Vesper — CLI
 
-**Name:** Keystone — CLI
+**Name:** Vesper — CLI
 
 **Short description:** Launch background coding CLIs, answer scoped technical questions, review changes, and verify work through your own coding-agent MCP bridge.
 

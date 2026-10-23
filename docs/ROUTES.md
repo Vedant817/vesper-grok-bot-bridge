@@ -2,7 +2,7 @@
 
 The recommended community offering has **two Bot templates and two MCP connection routes**, with **one MCP server implemented by this repository**.
 
-| | Keystone — T3 | Keystone — CLI |
+| | Vesper — T3 | Vesper — CLI |
 | --- | --- | --- |
 | Recipient gets the Bot | Grok Bot Marketplace or published template link | Grok Bot Marketplace or published template link |
 | Coding backend | T3 Code projects/threads | Background native CLI processes, usually ACP v1 stdio |

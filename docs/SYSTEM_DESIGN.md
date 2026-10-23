@@ -13,7 +13,7 @@ Use this diagram in a community post. Nodes identify product ownership; edge lab
 ```mermaid
 flowchart TB
   Owner["Owner / developer"]
-  Bot["Grok Bot / Keystone templates<br/>Supervision, technical answers, review"]
+  Bot["Grok Bot / Vesper templates<br/>Supervision, technical answers, review"]
   Owner -->|"Task and acceptance criteria"| Bot
   subgraph T3Route["Route A - T3 product boundary"]
     Relay["T3 Connect<br/>HTTPS /mcp + T3 OAuth"]
@@ -267,7 +267,7 @@ Open the [offline interactive explorer](diagrams/explorer.html) for tabs, zoom, 
 
 | Layer | Technology actually used | Role / boundary |
 | --- | --- | --- |
-| Supervisor / community | Grok Bot; Keystone CLI and T3 instruction profiles | External reasoning client; templates are publisher source, not published marketplace links. |
+| Supervisor / community | Grok Bot; Vesper CLI and T3 instruction profiles | External reasoning client; templates are publisher source, not published marketplace links. |
 | Runtime / language | Node.js >=22; TypeScript 5.9.3; ESM | CLI entrypoints and background daemon. CI uses Node 24. |
 | MCP | @modelcontextprotocol/sdk ^1.32.1 | JSON-RPC tool contracts; stdio, Streamable HTTP and legacy SSE transports. |
 | HTTP / validation | Express ^5.3.0; Zod ^3.25.76 | Routing, strict schemas, OAuth and request validation. |

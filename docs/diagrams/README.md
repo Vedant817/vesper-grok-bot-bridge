@@ -1,6 +1,6 @@
 # Architecture diagrams
 
-Editable Mermaid diagrams and shareable SVG exports for Keystone Agent Bridge.
+Editable Mermaid diagrams and shareable SVG exports for Vesper Grok Bot Bridge.
 
 | Diagram | Mermaid source | SVG export |
 | --- | --- | --- |
