@@ -3,6 +3,7 @@ on: [push, pull_request]
 jobs:
   test:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -13,6 +14,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: Type check
+        run: npm run lint
+      - name: Tests
+        run: npm test -- --no-file-parallelism --maxWorkers 1
+      - name: Build
+        run: npm run build
       - run: npm audit --audit-level=moderate
       - run: npm pack --dry-run

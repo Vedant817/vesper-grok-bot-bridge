@@ -19,7 +19,7 @@ export interface Provider {
 /** Owner-controlled configuration; never accepted as an MCP tool argument. */
 export interface ProviderOverride { executable: string; args?: string[]; models?: string[]; env?: Record<string, string>; protocol?: 'acp' | 'codex' | 'claude'; authMethodId?: string }
 interface Launch { executable: string; args: string[] }
-async function exists(file: string): Promise<boolean> { try { await access(file, process.platform === 'win32' ? constants.F_OK : constants.X_OK); return true; } catch { return false; } }
+async function exists(file: string, executable = true): Promise<boolean> { try { await access(file, process.platform === 'win32' ? constants.F_OK : executable ? constants.X_OK : constants.R_OK); return true; } catch { return false; } }
 const npmPackages: Record<string, string> = { codex: '@openai/codex', claude: '@anthropic-ai/claude-code', opencode: 'opencode-ai' };
 /** npm's Windows shims are .cmd/.ps1; run the package's declared JS bin under node instead. */
 async function npmEntrypoint(name: string): Promise<Launch | undefined> {
@@ -33,7 +33,7 @@ async function npmEntrypoint(name: string): Promise<Launch | undefined> {
       const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.[name];
       if (typeof bin !== 'string') continue;
       const target = resolve(packageDir, bin);
-      if (!target.startsWith(packageDir + sep) || !await exists(target)) continue;
+      if (!target.startsWith(packageDir + sep) || !await exists(target, false)) continue;
       return { executable: process.execPath, args: [target] };
     } catch {}
   }
@@ -48,10 +48,12 @@ export async function resolveExecutable(name: string): Promise<Launch | undefine
   }
   if (!isAbsolute(name) && name === 'grok') names.push(join(homedir(), '.grok', 'bin', windows ? 'grok.exe' : 'grok'));
   for (const candidate of names) {
-    if (!await exists(candidate)) continue;
     const suffix = extname(candidate).toLowerCase();
+    // Node reads JavaScript entrypoints; only directly launched binaries need X_OK.
+    const javascript = ['.js', '.mjs', '.cjs'].includes(suffix);
+    if (!await exists(candidate, !javascript)) continue;
     if (['.ps1', '.cmd', '.bat'].includes(suffix)) continue;
-    if (suffix === '.js' || suffix === '.mjs' || suffix === '.cjs') return { executable: process.execPath, args: [resolve(candidate)] };
+    if (javascript) return { executable: process.execPath, args: [resolve(candidate)] };
     if (windows && !['.exe', '.com'].includes(suffix)) continue;
     return { executable: resolve(candidate), args: [] };
   }

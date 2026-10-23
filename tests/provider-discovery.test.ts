@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { probeAcp } from '../src/bridge/acp-discovery.js';
@@ -84,6 +84,16 @@ createInterface({input:process.stdin}).on('line', line=>{const m=JSON.parse(line
     const providers = await discoverProviders({ ...disabled(temporary!), 'grok-build': { executable: script } });
     expect(providers.find(provider => provider.id === 'grok-build')).toMatchObject({ label: 'Grok Build', available: true, protocol: 'acp', models: [] });
     expect(JSON.parse((await readFile(log, 'utf8')).split('\n')[0]).argv).toEqual(['--permission-mode', 'default', 'agent', '--no-leader', 'stdio']);
+  });
+  it.runIf(process.platform !== 'win32')('requires execute permission for native binaries but only read permission for Node scripts', async () => {
+    const { script } = await fixture();
+    await chmod(script, 0o600);
+    expect(await resolveExecutable(script)).toEqual({ executable: process.execPath, args: [resolve(script)] });
+    const native = join(temporary!, 'native-agent');
+    await writeFile(native, '#!/bin/sh\nexit 0\n', { mode: 0o600 });
+    expect(await resolveExecutable(native)).toBeUndefined();
+    await chmod(native, 0o700);
+    expect(await resolveExecutable(native)).toEqual({ executable: resolve(native), args: [] });
   });
   it('does not run a native model-list command against a provider overridden to ACP', async () => {
     const { script, log } = await fixture();
