@@ -1,6 +1,6 @@
-# Bot profile
+# Keystone — CLI
 
-**Name:** CLI Coding Supervisor
+**Name:** Keystone — CLI
 
 **Short description:** Launch background coding CLIs, answer scoped technical questions, review changes, and verify work through your own coding-agent MCP bridge.
 

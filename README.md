@@ -8,8 +8,8 @@ We maintain **two focused Bot templates**, with different tool contracts. [Full 
 
 | What you use | Bot template | MCP server | Setup guide |
 | --- | --- | --- | --- |
-| T3 Code | [T3 Coding Supervisor](community/t3/PROFILE.md) | T3 already supplies its server through T3 Connect; no bridge install | [T3 setup](docs/T3_CONNECT_QUICKSTART.md) |
-| Coding CLIs without T3 | [CLI Coding Supervisor](community/cli/PROFILE.md) | Install this project's CLI/MCP bridge once; enroll multiple ACP/native CLIs | [Standalone MCP setup](docs/STANDALONE.md), [provider enrollment](docs/CLI_CONNECTIONS.md) |
+| T3 Code | [Keystone — T3](community/t3/PROFILE.md) | T3 already supplies its server through T3 Connect; no bridge install | [T3 setup](docs/T3_CONNECT_QUICKSTART.md) |
+| Coding CLIs without T3 | [Keystone — CLI](community/cli/PROFILE.md) | Install this project's CLI/MCP bridge once; enroll multiple ACP/native CLIs | [Standalone MCP setup](docs/STANDALONE.md), [provider enrollment](docs/CLI_CONNECTIONS.md) |
 
 Recipients add a published Bot through Grok Bot Marketplace or a real shared template link. The profiles above are publisher source files, not marketplace links. **No marketplace listing or public template URL is published by this repository yet.** Custom MCP servers are installed separately; importing a Bot does not install software or authenticate coding accounts. [Template publishing details](community/README.md).
 

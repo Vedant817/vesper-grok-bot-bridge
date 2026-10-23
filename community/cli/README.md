@@ -1,6 +1,6 @@
-# CLI Coding Supervisor template
+# Keystone — CLI template
 
-This is the publisher source for the CLI Coding Supervisor, paired with the separately installed `grok-bot-mcp-agent` CLI/MCP runtime. Ordinary recipients add a published Bot through Grok Bot Marketplace or a genuine shared link, then install the runtime. The source kit is optional for them; it is not a native import file or an approved marketplace listing. See [the two-template index](../README.md) for the separate T3 profile.
+This is the publisher source for the Keystone — CLI, paired with the separately installed `grok-bot-mcp-agent` CLI/MCP runtime. Ordinary recipients add a published Bot through Grok Bot Marketplace or a genuine shared link, then install the runtime. The source kit is optional for them; it is not a native import file or an approved marketplace listing. See [the two-template index](../README.md) for the separate T3 profile.
 
 ## Prepare the Bot
 

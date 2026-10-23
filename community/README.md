@@ -6,8 +6,8 @@ Maintain **two focused templates**:
 
 | Template | Profile and listing | Full role | Required MCP connection |
 | --- | --- | --- | --- |
-| T3 Coding Supervisor | [T3 profile](t3/PROFILE.md), [listing](t3/LISTING.md) | [T3 instructions](../docs/T3_BOT_INSTRUCTIONS.md) | Recipient's T3 Connect HTTPS `/mcp`; T3 provides the server. |
-| CLI Coding Supervisor | [CLI profile](cli/PROFILE.md), [listing](cli/LISTING.md) | [CLI instructions](../docs/GROK_BOT_INSTRUCTIONS.md) | Recipient's installed bridge HTTPS/OAuth `/mcp`; this project provides the server. |
+| Keystone — T3 | [T3 profile](t3/PROFILE.md), [listing](t3/LISTING.md) | [T3 instructions](../docs/T3_BOT_INSTRUCTIONS.md) | Recipient's T3 Connect HTTPS `/mcp`; T3 provides the server. |
+| Keystone — CLI | [CLI profile](cli/PROFILE.md), [listing](cli/LISTING.md) | [CLI instructions](../docs/GROK_BOT_INSTRUCTIONS.md) | Recipient's installed bridge HTTPS/OAuth `/mcp`; this project provides the server. |
 
 Use [T3 preparation](t3/README.md) or [CLI preparation](cli/README.md). Keep credentials, personal connectors, internal URLs, paths, skills, routines and account context out of both exports. Inspect the platform's actual template details before publication. A fresh Bot is not a security boundary: account-shared tools may still be visible.
 

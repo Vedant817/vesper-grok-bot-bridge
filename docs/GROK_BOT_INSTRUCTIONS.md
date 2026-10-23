@@ -1,4 +1,4 @@
-# Coding agent supervisor job
+# Copyable role: Keystone — CLI
 
 For native Grok Bot control of T3 Code, use [the T3-specific bot role](T3_BOT_INSTRUCTIONS.md) and [native setup guide](T3_CONNECT_QUICKSTART.md). This document is the optional multi-CLI bridge role; its `agent_*` tools differ from T3's `t3_*` tools.
 
