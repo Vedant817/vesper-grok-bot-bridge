@@ -1,5 +1,5 @@
 import { z } from 'zod';
-const command = z.object({ executable: z.string().min(1), args: z.array(z.string()), env: z.record(z.string()).optional() }).strict();
+const command = z.object({ executable: z.string().min(1), args: z.array(z.string()), env: z.record(z.string(), z.string()).optional() }).strict();
 export const configSchema = z.object({
   repository: z.string().min(1), stateDirectory: z.string().min(1), model: z.string().min(1).optional(),
   adapter: z.enum(['t3-mcp', 'acp', 'codex', 'pty']),

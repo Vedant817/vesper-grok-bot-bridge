@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const command = z.object({ executable: z.string().min(1), args: z.array(z.string()), env: z.record(z.string()).optional() }).strict();
+const command = z.object({ executable: z.string().min(1), args: z.array(z.string()), env: z.record(z.string(), z.string()).optional() }).strict();
 export const t3ConnectionSchema = z.object({
   projectId: z.string().min(1), endpoint: z.string().url().optional(), legacyEndpoint: z.string().url().optional(), tokenEnv: z.string().min(1).optional(),
   connect: z.object({ credentialRef: z.string().regex(/^[a-f0-9]{64}$/), bridge: z.object({ command: z.string().min(1), args: z.array(z.string()).optional() }).strict().optional() }).strict().optional(),

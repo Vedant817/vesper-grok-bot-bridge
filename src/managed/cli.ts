@@ -49,7 +49,7 @@ async function toolArguments(source?: string): Promise<Record<string, unknown>> 
     text = file.toString('utf8');
   }
   if (text.length > 65536) throw new Error('Tool arguments exceed 64KB');
-  return z.record(z.unknown()).parse(JSON.parse(text));
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(text));
 }
 
 async function readJson(file: string): Promise<any | undefined> {

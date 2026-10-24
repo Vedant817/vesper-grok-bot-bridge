@@ -11,7 +11,7 @@ import { connectEndpoint } from './security.js';
 const recordSchema = z.object({
   version: z.literal(1), endpoint: z.string(), accessToken: z.string().min(1).max(32768),
   expiresAt: z.number().finite().positive(), enrolledAt: z.number().finite().positive(),
-  clientInformation: z.record(z.unknown()), rejected: z.boolean().optional()
+  clientInformation: z.record(z.string(), z.unknown()), rejected: z.boolean().optional()
 });
 export type ConnectCredential = z.infer<typeof recordSchema>;
 /** Injectable store supports fixtures without touching installed per-user credentials. */
