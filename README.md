@@ -1,6 +1,7 @@
 # Vesper Grok Bot Bridge
 
 [![Verify](https://github.com/Vedant817/vesper-grok-bot-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/Vedant817/vesper-grok-bot-bridge/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/grok-bot-mcp-agent)](https://www.npmjs.com/package/grok-bot-mcp-agent)
 
 Use Grok Bot to supervise coding agents: start a task, inspect the agent's response, resolve delegated technical input, request improvements in the same session, and review real verification before accepting work.
 
@@ -12,10 +13,10 @@ We maintain **two focused Bot templates**, with different tool contracts. [Full 
 
 | What you use | Bot template | MCP server | Setup guide |
 | --- | --- | --- | --- |
-| T3 Code | [Vesper — T3](community/t3/PROFILE.md) | T3 already supplies its server through T3 Connect; no bridge install | [T3 setup](docs/T3_CONNECT_QUICKSTART.md) |
-| Coding CLIs without T3 | [Vesper — CLI](community/cli/PROFILE.md) | Install this project's CLI/MCP bridge once; enroll multiple ACP/native CLIs | [Standalone MCP setup](docs/STANDALONE.md), [provider enrollment](docs/CLI_CONNECTIONS.md) |
+| T3 Code | [Vesper — T3](https://x.ai/bot/H2br1687IFJlyapDHroic) ([source](community/t3/PROFILE.md)) | T3 already supplies its server through T3 Connect; no bridge install | [T3 setup](docs/T3_CONNECT_QUICKSTART.md) |
+| Coding CLIs without T3 | [Vesper — CLI](https://x.ai/bot/BuUvKwDGbSoqwNvNDreQk) ([source](community/cli/PROFILE.md)) | Install this project's CLI/MCP bridge once; enroll multiple ACP/native CLIs | [Standalone MCP setup](docs/STANDALONE.md), [provider enrollment](docs/CLI_CONNECTIONS.md) |
 
-Recipients add a published Bot through Grok Bot Marketplace or a real shared template link. The profiles above are publisher source files, not marketplace links. **No marketplace listing or public template URL is published by this repository yet.** Custom MCP servers are installed separately; importing a Bot does not install software or authenticate coding accounts. [Template publishing details](community/README.md).
+Recipients add a published Bot through the Grok Bot Marketplace or a shared template link. The profiles above are the publisher source files. **Both templates are published and shareable:** [Vesper — CLI](https://x.ai/bot/BuUvKwDGbSoqwNvNDreQk) and [Vesper — T3](https://x.ai/bot/H2br1687IFJlyapDHroic); inside the Grok Bot app the one-click add links are `grokbot://app/v1/bot-template?id=BuUvKwDGbSoqwNvNDreQk` and `grokbot://app/v1/bot-template?id=H2br1687IFJlyapDHroic`. Custom MCP servers are installed separately; importing a Bot does not install software or authenticate coding accounts. [Template publishing details](community/README.md).
 
 A combined Bot is optional for advanced users who connect both resources and select the route explicitly. It is not the default offering and must never silently move work between backends. There is one MCP server implementation in this repository, not one server per CLI. T3's server is a separate product.
 
@@ -62,13 +63,15 @@ All five diagrams are saved in [docs/diagrams](docs/diagrams/README.md), with ed
 
 ## Standalone MCP: install once
 
-Requires Node.js 22+, npm, Git and your chosen authenticated coding CLI/ACP adapter. Download this project's runtime archive from a trusted release, verify its checksum, then install it by local path:
+Requires Node.js 22+, npm, Git and your chosen authenticated coding CLI/ACP adapter. Install the published package from [npm](https://www.npmjs.com/package/grok-bot-mcp-agent):
 
 ```powershell
-npm install -g ./grok-bot-mcp-agent-0.1.0.tgz
+npm install -g grok-bot-mcp-agent
 grok-agent-bridge setup --repository C:/Code/my-project
 grok-agent-bridge doctor
 ```
+
+Prefer a checksum-verified offline archive? Download the runtime archive from a trusted [GitHub release](https://github.com/Vedant817/vesper-grok-bot-bridge/releases), verify its SHA-256 sidecar, then install it by local path (`npm install -g ./grok-bot-mcp-agent-<version>.tgz`).
 
 For repositories without a suitable detected test/check command, enroll the real verifier explicitly. Then enroll your exact ACP executable/model, configure a stable owner-controlled HTTPS gateway and approve OAuth locally. **Continue with [the complete standalone guide](docs/STANDALONE.md)**; the three commands above alone do not connect Grok Bot's cloud connector to your computer.
 

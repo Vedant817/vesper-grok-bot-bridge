@@ -2,7 +2,7 @@
 
 The wrapper launches installed native CLI processes in the background. ACP carries prompts, streamed responses, offered permission choices, cancellation and explicit session continuation. Codex can also use its native app-server adapter. A visible terminal and T3 Code are not required. The coding host must remain awake, online and signed in, with the managed bridge and chosen CLI authentication available.
 
-Add the Vesper — CLI through Grok Bot Marketplace or its genuine shared link when published; this repository currently has no public template URL. Then install the MCP runtime below. The [template source kit](../community/cli/README.md) is for publishers/manual setup, not a required marketplace-user download. [Compare the T3 route](ROUTES.md) and read [provider/account requirements](PROVIDER_POLICY.md) before choosing authentication or offering hosted use.
+Add the published [Vesper — CLI](https://x.ai/bot/BuUvKwDGbSoqwNvNDreQk) through Grok Bot Marketplace or that shared template link. Then install the MCP runtime below. The [template source kit](../community/cli/README.md) is for publishers/manual setup, not a required marketplace-user download. [Compare the T3 route](ROUTES.md) and read [provider/account requirements](PROVIDER_POLICY.md) before choosing authentication or offering hosted use.
 
 Grok Bot's command MCP connectors execute on its cloud computer, according to the installed application's connector description and its capability response. Installing a local stdio server does not connect that cloud computer to Windows. Use the standalone authenticated HTTPS gateway below. Local MCP hosts can use `grok-agent-bridge connect` over stdio directly.
 

@@ -27,6 +27,6 @@ An advanced user can connect both resources to one Bot, but each task must name 
 
 ## Marketplace and distribution
 
-An ordinary user adds a Bot through the platform; the `.tgz` source kit is for publishers/contributors or manual setup, not a marketplace requirement. Native publication generates the Add-to-Grok-Bot link. A public link does not prove catalog inclusion, and no marketplace URL is currently published by this repository. See [publisher instructions](../community/README.md).
+An ordinary user adds a Bot through the platform; the `.tgz` source kit is for publishers/contributors or manual setup, not a marketplace requirement. Native publication generates the Add-to-Grok-Bot link. A public link does not prove catalog inclusion. The published template links are listed in the [repository README](../README.md#choose-your-setup). See [publisher instructions](../community/README.md).
 
 Only the CLI route needs the runtime archive. One installed bridge can operate multiple owner-enrolled CLIs; there is no separate MCP server installation per model/vendor. Other local MCP clients can use its stdio `connect` command instead of remote HTTPS. Read [provider policy](PROVIDER_POLICY.md): ACP support is a protocol capability, not permission to proxy subscriptions or bypass restrictions.

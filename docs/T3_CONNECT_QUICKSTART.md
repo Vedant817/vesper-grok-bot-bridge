@@ -8,7 +8,7 @@ Your phone or desktop → Grok Bot → HTTPS MCP + OAuth → T3 Connect
                                             T3 host → coding agents
 ```
 
-Add the published Vesper — T3 through Grok Bot Marketplace or its real template link, then follow this guide. No public template URL is currently configured by this repository. Publishers maintain its [profile and listing source](../community/t3/README.md); the source kit is not a required recipient download or a native import format. Each user connects their own environment and approves their own access. No template grants the creator's endpoint, login or credentials. See [route comparison](ROUTES.md) and [provider-policy review](PROVIDER_POLICY.md).
+Add the published [Vesper — T3](https://x.ai/bot/H2br1687IFJlyapDHroic) through Grok Bot Marketplace or that shared template link, then follow this guide. Publishers maintain its [profile and listing source](../community/t3/README.md); the source kit is not a required recipient download or a native import format. Each user connects their own environment and approves their own access. No template grants the creator's endpoint, login or credentials. See [route comparison](ROUTES.md) and [provider-policy review](PROVIDER_POLICY.md).
 
 ## 1. Prepare the coding host once
 

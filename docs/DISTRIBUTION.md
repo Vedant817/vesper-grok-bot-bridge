@@ -2,7 +2,7 @@
 
 ## What community members receive
 
-Publish **two focused Bot templates** through Grok Bot's supported sharing flow: [Vesper — T3](../community/t3/README.md) and [Vesper — CLI](../community/cli/README.md). Members add their copy from Marketplace or a genuine template link. A shared link does not automatically establish catalog placement. No public template URL or npm release is configured here.
+Publish **two focused Bot templates** through Grok Bot's supported sharing flow: [Vesper — T3](../community/t3/README.md) and [Vesper — CLI](../community/cli/README.md). Members add their copy from Marketplace or a genuine template link. A shared link does not automatically establish catalog placement. Published copies: [Vesper — T3](https://x.ai/bot/H2br1687IFJlyapDHroic) and [Vesper — CLI](https://x.ai/bot/BuUvKwDGbSoqwNvNDreQk); the [npm package](https://www.npmjs.com/package/grok-bot-mcp-agent) carries the installable bridge runtime.
 
 T3 recipients connect T3's existing MCP server; they do not install this bridge. CLI recipients separately install this project's runtime and connect their own bridge. Custom MCP code does not travel with a native Bot template. See [the route comparison](ROUTES.md) and [official template guide](https://x.ai/bot/guides/templates-for-grok-bot).
 

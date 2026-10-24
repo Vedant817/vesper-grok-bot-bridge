@@ -267,7 +267,7 @@ Open the [offline interactive explorer](diagrams/explorer.html) for tabs, zoom, 
 
 | Layer | Technology actually used | Role / boundary |
 | --- | --- | --- |
-| Supervisor / community | Grok Bot; Vesper CLI and T3 instruction profiles | External reasoning client; templates are publisher source, not published marketplace links. |
+| Supervisor / community | Grok Bot; Vesper CLI and T3 instruction profiles | External reasoning client; the published Bot templates live at their share links, and the profiles here are publisher source. |
 | Runtime / language | Node.js >=22; TypeScript 5.9.3; ESM | CLI entrypoints and background daemon. CI uses Node 24. |
 | MCP | @modelcontextprotocol/sdk ^1.32.1 | JSON-RPC tool contracts; stdio, Streamable HTTP and legacy SSE transports. |
 | HTTP / validation | Express ^5.3.0; Zod ^3.25.76 | Routing, strict schemas, OAuth and request validation. |
